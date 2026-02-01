@@ -36,3 +36,26 @@ def test_is_loaded():
     """is_loaded deve refletir estado."""
     predictor = StockPredictor()
     assert predictor.is_loaded() is False
+
+
+def test_is_loaded_after_load(trained_model_files):
+    """is_loaded deve ser True apos carregar modelo."""
+    model_path, scaler_path = trained_model_files
+    predictor = StockPredictor(model_path, scaler_path)
+    assert predictor.is_loaded() is True
+
+
+def test_reload_model(trained_model_files):
+    """Hot reload funciona."""
+    model_path, scaler_path = trained_model_files
+
+    predictor = StockPredictor()
+    assert predictor.is_loaded() is False
+
+    # Carregar modelo
+    predictor.reload_model(model_path, scaler_path)
+    assert predictor.is_loaded() is True
+
+    # Recarregar (hot reload)
+    predictor.reload_model(model_path, scaler_path)
+    assert predictor.is_loaded() is True
