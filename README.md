@@ -1,77 +1,149 @@
-# FIAP Machine Learning Tech Challenge 4
+# Stock Prediction LSTM
 
-Seu desafio é criar um modelo preditivo de redes neurais Long Short 
-Term Memory (LSTM) para predizer o valor de fechamento da bolsa de valores 
-de uma empresa à sua escolha e realizar toda a pipeline de desenvolvimento, 
-desde a criação do modelo preditivo até o deploy do modelo em uma API que 
-permita a previsão de preços de ações.
+Sistema de previsao de precos de acoes usando LSTM com PyTorch.
 
-|![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)  |
-|:-----------------------------------------------------------------:|
+|![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)|![PyTorch](https://img.shields.io/badge/PyTorch-2.x-red.svg)|![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)|
+|:---:|:---:|:---:|
 
------------------------------------
+## Features
 
-## Sumário
+- **Predicao de precos** - Previsao de precos futuros usando LSTM
+- **Treinamento via API** - Inicie treinamentos com uma requisicao
+- **Inferencia rapida** - Endpoint otimizado para baixa latencia
+- **Cache inteligente** - SQLite com expiracao automatica (24h)
+- **Metricas Prometheus** - Monitoramento em tempo real
+- **Docker ready** - Deploy com um comando
 
-- [Descrição](#descrição)
-- [Tecnologias Utilizadas](#tecnologias-utilizadas)
-- [Licença e Autores](#licença-e-autores)
+## Quick Start
 
------------------------------------
+### Instalacao Local
 
-## Descrição
+```bash
+# Clonar repositorio
+git clone <repo>
+cd stock-prediction-lstm
 
-Seu Tech Challenge precisa seguir os seguintes requisitos:
+# Instalar dependencias
+pip install -e ".[dev]"
 
-1. Coleta e Pré-processamento dos Dados
-• Coleta de Dados: utilize um dataset de preços históricos de ações, 
-como o Yahoo Finance ou qualquer outro dataset financeiro disponível 
-(dica: utilize a biblioteca yfinance). 
+# Inicializar banco
+make init-db
 
-2. Desenvolvimento do Modelo LSTM 
-• Construção do Modelo: implemente um modelo de deep learning 
-utilizando LSTM para capturar padrões temporais nos dados de preços 
-das ações. 
-• Treinamento: treine o modelo utilizando uma parte dos dados e ajuste 
-os hiperparâmetros para otimizar o desempenho. 
-• Avaliação: avalie o modelo utilizando dados de validação e utilize 
-métricas como MAE (Mean Absolute Error), RMSE (Root Mean Square 
-Error), MAPE (Erro Percentual Absoluto Médio) ou outra métrica 
-apropriada para medir a precisão das previsões.
+# Rodar API
+make run
+```
 
-3. Salvamento e Exportação do Modelo 
-• Salvar o Modelo: após atingir um desempenho satisfatório, salve o 
-modelo treinado em um formato que possa ser utilizado para 
-inferência.
+### Treinar Modelo
 
-4. Deploy do Modelo 
-• Criação da API: desenvolva uma API RESTful utilizando Flask ou 
-FastAPI para servir o modelo. A API deve permitir que o usuário 
-forneça dados históricos de preços e receba previsões dos preços 
-futuros. 
+```bash
+# Via CLI
+python scripts/train.py --ticker PETR4.SA --epochs 100
 
-5. Escalabilidade e Monitoramento 
-• Monitoramento: configure ferramentas de monitoramento para 
-rastrear a performance do modelo em produção, incluindo tempo de 
-resposta e utilização de recursos. 
-Entregáveis: 
-• Código-fonte do modelo LSTM no seu repositório do GIT + 
-documentação do projeto. 
-• Scripts ou contêineres Docker para deploy da API. 
-• Link para a API em produção, caso tenha sido deployada em um 
-ambiente de nuvem.
+# Via API
+curl -X POST http://localhost:8000/api/v1/training/start \
+  -H "Content-Type: application/json" \
+  -d '{"ticker": "PETR4.SA", "epochs": 50}'
+```
 
------------------------------------
+### Fazer Predicao
 
-## Tecnologias Utilizadas
+```bash
+curl -X POST http://localhost:8000/api/v1/predict \
+  -H "Content-Type: application/json" \
+  -d '{"ticker": "PETR4.SA", "days_ahead": 5}'
+```
 
-- **Python 3.13**
+### Docker
 
------------------------------------
+```bash
+docker-compose -f docker/docker-compose.yml up -d
+```
 
-## Licença e Autores
+## API Endpoints
 
-### 🧑‍💻 Desenvolvido por
+### Training
+
+| Metodo | Endpoint | Descricao |
+|--------|----------|-----------|
+| POST | `/api/v1/training/start` | Inicia treinamento (202) |
+| GET | `/api/v1/training/status/{job_id}` | Status do job |
+| GET | `/api/v1/training/jobs` | Lista jobs |
+| GET | `/api/v1/training/models` | Lista modelos |
+| POST | `/api/v1/training/activate/{version_id}` | Ativa modelo |
+
+### Prediction
+
+| Metodo | Endpoint | Descricao |
+|--------|----------|-----------|
+| POST | `/api/v1/predict` | Predicao de precos |
+| GET | `/api/v1/predict/{ticker}` | Predicao rapida |
+| POST | `/api/v1/predict/batch` | Multiplos tickers |
+
+### Inference
+
+| Metodo | Endpoint | Descricao |
+|--------|----------|-----------|
+| POST | `/api/v1/inference` | Inferencia direta |
+| POST | `/api/v1/inference/batch` | Batch inference |
+| GET | `/api/v1/inference/warmup` | Aquece modelo |
+
+### Health & Cache
+
+| Metodo | Endpoint | Descricao |
+|--------|----------|-----------|
+| GET | `/health` | Health check |
+| GET | `/metrics` | Prometheus metrics |
+| GET | `/api/v1/cache/info` | Info do cache |
+| POST | `/api/v1/cache/sync/{ticker}` | Forca sync |
+
+## Arquitetura
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Client    │────>│   FastAPI   │────>│   SQLite    │
+└─────────────┘     └─────────────┘     └─────────────┘
+                           │
+                           v
+                    ┌─────────────┐     ┌─────────────┐
+                    │   LSTM      │<────│  yfinance   │
+                    │  (PyTorch)  │     │   (cache)   │
+                    └─────────────┘     └─────────────┘
+```
+
+## Cache
+
+- Dados do yfinance sao cacheados no SQLite
+- Cache expira apos **24 horas** (configuravel)
+- Use `/api/v1/cache/sync/{ticker}` para forcar atualizacao
+
+## Configuracao
+
+Crie um arquivo `.env`:
+
+```env
+DATABASE_URL=sqlite:///./data/stock_cache.db
+CACHE_EXPIRY_HOURS=24
+EPOCHS=100
+HIDDEN_SIZE=64
+LOG_LEVEL=INFO
+```
+
+## Desenvolvimento
+
+```bash
+# Testes
+make test
+
+# Lint
+ruff check src/
+
+# Format
+black src/
+```
+
+## Licenca e Autores
+
+### Desenvolvido por
 
 - `Beatriz Rosa Carneiro Gomes - RM365967`
 - `Cristine Scheibler - RM365433`

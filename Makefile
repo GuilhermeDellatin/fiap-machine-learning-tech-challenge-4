@@ -1,4 +1,4 @@
-.PHONY: install init-db train run test docker-build docker-run clean
+.PHONY: install init-db train train-quick evaluate run test docker-build docker-run clean
 
 install:
 	pip install -e ".[dev]"
@@ -8,6 +8,12 @@ init-db:
 
 train:
 	python scripts/train.py --ticker PETR4.SA --epochs 100
+
+train-quick:
+	python scripts/train.py --ticker AAPL --epochs 5 --no-sync
+
+evaluate:
+	python scripts/evaluate.py --ticker PETR4.SA
 
 run:
 	uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
