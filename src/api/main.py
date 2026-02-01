@@ -33,6 +33,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Metrics middleware
+from src.api.middleware.metrics import MetricsMiddleware
+
+app.add_middleware(MetricsMiddleware)
+
 # CORS
 app.add_middleware(
     CORSMiddleware,

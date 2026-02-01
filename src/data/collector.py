@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, date
 from sqlalchemy.orm import Session
 
 from src.database.repository import PriceCacheRepository
+from src.monitoring.metrics import record_cache_hit, record_cache_miss
 from src.utils.config import settings
 from src.utils.logger import get_logger
 
@@ -67,10 +68,12 @@ class StockDataCollector:
             max_age_hours=settings.CACHE_EXPIRY_HOURS
         ):
             logger.info(f"Cache HIT para {ticker}")
+            record_cache_hit(ticker)
             return self._get_from_cache(db, ticker, start, end)
 
         # 2. Cache miss - baixar do yfinance
         logger.info(f"Cache MISS para {ticker} - baixando do yfinance")
+        record_cache_miss(ticker)
         df = self._download_from_yfinance(ticker, start_date, end_date)
 
         # 3. Salvar no cache

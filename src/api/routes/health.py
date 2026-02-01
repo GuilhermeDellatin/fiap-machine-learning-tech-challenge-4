@@ -2,6 +2,7 @@
 Endpoints de health check e cache.
 """
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from datetime import datetime
@@ -9,9 +10,19 @@ from datetime import datetime
 from src.api.dependencies import get_database, get_collector
 from src.database.repository import PriceCacheRepository, ModelRegistryRepository
 from src.api.schemas.prediction import CacheInfoResponse, CacheInfoItem, CacheSyncResponse
+from src.monitoring.metrics import get_metrics
 from src.utils.config import settings
 
 router = APIRouter()
+
+
+@router.get("/metrics")
+def metrics():
+    """Prometheus metrics endpoint."""
+    return Response(
+        content=get_metrics(),
+        media_type="text/plain"
+    )
 
 
 @router.get("/health")
