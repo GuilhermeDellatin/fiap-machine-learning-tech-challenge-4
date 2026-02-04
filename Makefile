@@ -16,7 +16,7 @@ evaluate:
 	python scripts/evaluate.py --ticker PETR4.SA
 
 run:
-	uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
+	uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000 --log-level info
 
 test:
 	pytest tests/ -v --cov=src --cov-report=html
