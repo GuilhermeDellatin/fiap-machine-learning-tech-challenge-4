@@ -12,7 +12,7 @@ from src.models.predictor import StockPredictor
 
 def get_database() -> Generator[Session, None, None]:
     """Dependency para injetar sessão do banco."""
-    return get_db()
+    yield from get_db()
 
 
 @lru_cache()
