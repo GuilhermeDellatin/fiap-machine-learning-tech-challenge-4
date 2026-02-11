@@ -5,6 +5,7 @@ import json
 import uuid
 from datetime import datetime
 from pathlib import Path
+import torch
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
@@ -74,6 +75,13 @@ def train_model_task(job_id: str, ticker: str, params: dict) -> None:
             num_layers=params["num_layers"],
             dropout=params["dropout"],
         )
+        
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        try:
+            torch.zeros(1).to(device)
+        except Exception:
+            device = torch.device("cpu")
+        model = model.to(device)
 
         # 5. Treinar
         trainer = ModelTrainer(model, learning_rate=params["learning_rate"])
