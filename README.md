@@ -12,6 +12,7 @@ Sistema de previsao de precos de acoes usando LSTM com PyTorch.
 - **Inferencia rapida** - Endpoint otimizado para baixa latencia
 - **Cache inteligente** - SQLite com expiracao automatica (24h)
 - **Metricas Prometheus** - Monitoramento em tempo real
+- **MLflow tracking** - Experimentos, metricas, parametros e artefatos
 - **Docker ready** - Deploy com um comando
 
 ## Quick Start
@@ -44,6 +45,19 @@ curl -X POST http://localhost:8000/api/v1/training/start \
   -H "Content-Type: application/json" \
   -d '{"ticker": "PETR4.SA", "epochs": 50}'
 ```
+
+### MLflow
+
+```bash
+# Subir UI local do MLflow
+make mlflow-ui
+```
+
+Apos iniciar, acesse `http://localhost:5000` para acompanhar:
+- Parametros de treino (arquitetura, learning rate, batch size etc.)
+- Metricas por epoca (train/val loss)
+- Metricas finais (MAE, RMSE, MAPE, R2)
+- Artefatos gerados (`.pt`, scaler e relatorios de avaliacao)
 
 ### Fazer Predicao
 
@@ -157,6 +171,9 @@ CACHE_EXPIRY_HOURS=24
 EPOCHS=100
 HIDDEN_SIZE=64
 LOG_LEVEL=INFO
+MLFLOW_ENABLED=true
+MLFLOW_TRACKING_URI=file:./mlruns
+MLFLOW_EXPERIMENT_NAME=stock-prediction-lstm
 ```
 
 ## Desenvolvimento

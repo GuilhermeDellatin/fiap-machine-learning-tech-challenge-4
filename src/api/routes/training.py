@@ -5,31 +5,31 @@ import json
 import uuid
 from datetime import datetime
 from pathlib import Path
-import torch
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from src.api.dependencies import get_database, get_collector
-from src.database.connection import SessionLocal
-from src.database.repository import (
-    TrainingJobRepository,
-    ModelRegistryRepository,
-)
-from src.data.collector import StockDataCollector
-from src.data.preprocessor import DataPreprocessor
-from src.models.lstm_model import LSTMPredictor
-from src.models.trainer import ModelTrainer
+from src.api.dependencies import get_collector, get_database
 from src.api.schemas.training import (
+    ActivateModelResponse,
+    ModelInfo,
+    ModelListResponse,
+    TrainingJobListResponse,
+    TrainingJobSummary,
     TrainingRequest,
     TrainingResponse,
     TrainingStatusResponse,
-    TrainingJobListResponse,
-    TrainingJobSummary,
-    ModelListResponse,
-    ModelInfo,
-    ActivateModelResponse,
 )
+from src.data.collector import StockDataCollector
+from src.data.preprocessor import DataPreprocessor
+from src.database.connection import SessionLocal
+from src.database.repository import (
+    ModelRegistryRepository,
+    TrainingJobRepository,
+)
+from src.models.lstm_model import LSTMPredictor
+from src.models.trainer import ModelTrainer
+from src.monitoring.mlflow_tracker import MLflowTracker
 from src.utils.config import settings
 from src.utils.logger import get_logger
 
@@ -52,87 +52,146 @@ def train_model_task(job_id: str, ticker: str, params: dict) -> None:
     db = SessionLocal()
     job_repo = TrainingJobRepository()
     model_repo = ModelRegistryRepository()
+    tracker = MLflowTracker(
+        enabled=settings.MLFLOW_ENABLED,
+        tracking_uri=settings.MLFLOW_TRACKING_URI,
+        experiment_name=settings.MLFLOW_EXPERIMENT_NAME,
+    )
+    run_name = (
+        f"api_train_{ticker}_{job_id[:8]}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+    )
+    run_tags = {
+        "pipeline": "api",
+        "stage": "training",
+        "ticker": ticker,
+        "job_id": job_id,
+    }
 
     try:
-        # 1. Status: running
-        job_repo.update_job(db, job_id, status="running", started_at=datetime.utcnow())
-        db.commit()
+        with tracker.start_run(run_name=run_name, tags=run_tags):
+            tracker.log_params({"job_id": job_id, "ticker": ticker, **params})
 
-        # 2. Coletar dados
-        collector = StockDataCollector()
-        df = collector.sync_data(db, ticker)
-
-        # 3. Preprocessar
-        preprocessor = DataPreprocessor()
-        scaled = preprocessor.fit_transform(df)
-        X, y = preprocessor.create_sequences(scaled, params["sequence_length"])
-        (X_train, y_train), (X_val, y_val), (X_test, y_test) = preprocessor.split_data(X, y)
-
-        # 4. Criar modelo
-        model = LSTMPredictor(
-            input_size=1,
-            hidden_size=params["hidden_size"],
-            num_layers=params["num_layers"],
-            dropout=params["dropout"],
-        )
-        
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        try:
-            torch.zeros(1).to(device)
-        except Exception:
-            device = torch.device("cpu")
-        model = model.to(device)
-
-        # 5. Treinar
-        trainer = ModelTrainer(model, learning_rate=params["learning_rate"])
-
-        train_loader = trainer.create_dataloader(X_train, y_train, params["batch_size"])
-        val_loader = trainer.create_dataloader(X_val, y_val, params["batch_size"], shuffle=False)
-        test_loader = trainer.create_dataloader(X_test, y_test, params["batch_size"], shuffle=False)
-
-        def progress_callback(epoch, total_epochs, train_loss, val_loss, best_loss):
-            job_repo.update_job(
-                db, job_id,
-                epochs_completed=epoch,
-                current_loss=val_loss,
-                best_loss=best_loss,
-            )
+            # 1. Status: running
+            job_repo.update_job(db, job_id, status="running", started_at=datetime.utcnow())
             db.commit()
 
-        history = trainer.train(train_loader, val_loader, params["epochs"], progress_callback)
+            # 2. Coletar dados
+            collector = StockDataCollector()
+            df = collector.sync_data(db, ticker)
+            tracker.log_params({"records_collected": len(df)})
 
-        # 6. Avaliar
-        metrics = trainer.evaluate(test_loader)
+            # 3. Preprocessar
+            preprocessor = DataPreprocessor()
+            scaled = preprocessor.fit_transform(df)
+            X, y = preprocessor.create_sequences(scaled, params["sequence_length"])
+            (X_train, y_train), (X_val, y_val), (X_test, y_test) = preprocessor.split_data(X, y)
+            tracker.log_params(
+                {
+                    "train_samples": len(X_train),
+                    "val_samples": len(X_val),
+                    "test_samples": len(X_test),
+                }
+            )
 
-        # 7. Salvar modelo
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        version_id = f"{ticker}_{timestamp}"
-        model_path = f"{settings.MODEL_DIR}/{version_id}.pt"
-        scaler_path = f"{settings.MODEL_DIR}/{version_id}_scaler.joblib"
+            # 4. Criar modelo
+            model = LSTMPredictor(
+                input_size=1,
+                hidden_size=params["hidden_size"],
+                num_layers=params["num_layers"],
+                dropout=params["dropout"],
+            )
 
-        Path(settings.MODEL_DIR).mkdir(parents=True, exist_ok=True)
-        trainer.save_checkpoint(model_path)
-        preprocessor.save_scaler(scaler_path)
+            # 5. Treinar
+            trainer = ModelTrainer(model, learning_rate=params["learning_rate"])
 
-        # 8. Registrar modelo
-        registered = model_repo.register_model(
-            db, ticker, model_path, scaler_path,
-            metrics, params, history.get("best_epoch", params["epochs"]),
-        )
+            train_loader = trainer.create_dataloader(X_train, y_train, params["batch_size"])
+            val_loader = trainer.create_dataloader(
+                X_val, y_val, params["batch_size"], shuffle=False
+            )
+            test_loader = trainer.create_dataloader(
+                X_test, y_test, params["batch_size"], shuffle=False
+            )
 
-        # 9. Ativar modelo
-        model_repo.set_active_model(db, ticker, registered.version_id)
+            def progress_callback(epoch, total_epochs, train_loss, val_loss, best_loss):
+                job_repo.update_job(
+                    db,
+                    job_id,
+                    epochs_completed=epoch,
+                    current_loss=val_loss,
+                    best_loss=best_loss,
+                )
+                db.commit()
+                tracker.log_metrics(
+                    {
+                        "train_loss": train_loss,
+                        "val_loss": val_loss,
+                        "best_val_loss": best_loss,
+                        "epoch_progress_percent": epoch / total_epochs * 100,
+                    },
+                    step=epoch,
+                )
 
-        # 10. Job completed
-        job_repo.update_job(
-            db, job_id,
-            status="completed",
-            completed_at=datetime.utcnow(),
-            model_version_id=registered.version_id,
-        )
-        db.commit()
+            history = trainer.train(
+                train_loader,
+                val_loader,
+                params["epochs"],
+                progress_callback,
+            )
 
-        logger.info(f"Training completed: {registered.version_id}")
+            # 6. Avaliar
+            metrics = trainer.evaluate(test_loader)
+            tracker.log_metrics(metrics)
+            tracker.log_metrics(
+                {
+                    "best_epoch": history.get("best_epoch", params["epochs"]),
+                    "epochs_completed": len(history["train_losses"]),
+                }
+            )
+
+            # 7. Salvar modelo
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            version_id = f"{ticker}_{timestamp}"
+            model_path = f"{settings.MODEL_DIR}/{version_id}.pt"
+            scaler_path = f"{settings.MODEL_DIR}/{version_id}_scaler.joblib"
+
+            Path(settings.MODEL_DIR).mkdir(parents=True, exist_ok=True)
+            trainer.save_checkpoint(model_path)
+            preprocessor.save_scaler(scaler_path)
+            tracker.log_artifact(model_path, artifact_path="model")
+            tracker.log_artifact(scaler_path, artifact_path="preprocessing")
+
+            # 8. Registrar modelo
+            registered = model_repo.register_model(
+                db=db,
+                ticker=ticker,
+                model_path=model_path,
+                scaler_path=scaler_path,
+                metrics=metrics,
+                hyperparams=params,
+                epochs=history.get("best_epoch", params["epochs"]),
+                version_id=version_id,
+            )
+
+            # 9. Ativar modelo
+            model_repo.set_active_model(db, ticker, registered.version_id)
+
+            # 10. Job completed
+            job_repo.update_job(
+                db,
+                job_id,
+                status="completed",
+                completed_at=datetime.utcnow(),
+                model_version_id=registered.version_id,
+            )
+            db.commit()
+            tracker.set_tags(
+                {
+                    "job_status": "completed",
+                    "model_version_id": registered.version_id,
+                }
+            )
+
+            logger.info(f"Training completed: {registered.version_id}")
 
     except Exception as e:
         logger.error(f"Training failed: {e}")

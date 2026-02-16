@@ -1,8 +1,9 @@
 """
 Configurações centralizadas usando Pydantic Settings.
 """
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -32,6 +33,11 @@ class Settings(BaseSettings):
     API_PORT: int = 8000
     LOG_LEVEL: str = "INFO"
     CORS_ORIGINS: List[str] = ["*"]
+
+    # MLflow
+    MLFLOW_ENABLED: bool = True
+    MLFLOW_TRACKING_URI: str = "file:./mlruns"
+    MLFLOW_EXPERIMENT_NAME: str = "stock-prediction-lstm"
 
     model_config = SettingsConfigDict(
         env_file=".env",

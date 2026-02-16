@@ -7,9 +7,8 @@ from typing import List
 
 import pandas as pd
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 
-from src.database.models import PriceCache, TrainingJob, ModelRegistry
+from src.database.models import ModelRegistry, PriceCache, TrainingJob
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -207,12 +206,14 @@ class ModelRegistryRepository:
         metrics: dict,
         hyperparams: dict,
         epochs: int,
+        version_id: str | None = None,
     ) -> ModelRegistry:
         """
         Registra modelo. Gera version_id automaticamente.
         Formato: {ticker}_{timestamp}
         """
-        version_id = f"{ticker}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+        if not version_id:
+            version_id = f"{ticker}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
 
         model = ModelRegistry(
             version_id=version_id,
@@ -245,7 +246,7 @@ class ModelRegistryRepository:
         """Retorna modelo com is_active=True para o ticker."""
         return (
             db.query(ModelRegistry)
-            .filter(ModelRegistry.ticker == ticker, ModelRegistry.is_active == True)
+            .filter(ModelRegistry.ticker == ticker, ModelRegistry.is_active.is_(True))
             .first()
         )
 
@@ -282,6 +283,6 @@ class ModelRegistryRepository:
         if ticker:
             query = query.filter(ModelRegistry.ticker == ticker)
         if active_only:
-            query = query.filter(ModelRegistry.is_active == True)
+            query = query.filter(ModelRegistry.is_active.is_(True))
 
         return query.order_by(ModelRegistry.created_at.desc()).all()

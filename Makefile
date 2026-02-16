@@ -1,4 +1,4 @@
-.PHONY: install init-db train train-quick evaluate run test docker-build docker-run clean
+.PHONY: install init-db train train-quick evaluate mlflow-ui run test docker-build docker-run clean
 
 install:
 	pip install -e ".[dev]"
@@ -14,6 +14,9 @@ train-quick:
 
 evaluate:
 	python scripts/evaluate.py --ticker PETR4.SA
+
+mlflow-ui:
+	mlflow ui --backend-store-uri ./mlruns --port 5000
 
 run:
 	uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000 --log-level info
