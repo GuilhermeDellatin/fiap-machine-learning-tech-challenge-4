@@ -59,6 +59,37 @@ curl -X POST http://localhost:8000/api/v1/predict \
 docker-compose -f docker/docker-compose.yml up -d
 ```
 
+## Estrutura do Projeto
+```
+stock-prediction-lstm/
+├── src/
+│   ├── api/                 # FastAPI
+│   │   ├── main.py
+│   │   ├── dependencies.py
+│   │   ├── routes/          # health, training, inference, prediction
+│   │   ├── schemas/         # Pydantic models
+│   │   └── middleware/      # Prometheus metrics
+│   ├── database/            # SQLAlchemy
+│   │   ├── connection.py    # Engine, SessionLocal, get_db()
+│   │   ├── models.py        # PriceCache, TrainingJob, ModelRegistry
+│   │   └── repository.py    # CRUD operations
+│   ├── data/
+│   │   ├── collector.py     # yfinance + cache SQLite
+│   │   └── preprocessor.py  # Normalização, sequences
+│   ├── models/
+│   │   ├── lstm_model.py    # nn.Module PyTorch
+│   │   ├── trainer.py       # Treinamento com early stopping
+│   │   └── predictor.py     # Inferência
+│   ├── monitoring/          # Métricas Prometheus
+│   └── utils/               # config.py, logger.py
+├── scripts/                 # train.py, evaluate.py
+├── docker/                  # Dockerfile, docker-compose.yml
+├── tests/                   # pytest
+├── specs/                   # Especificações detalhadas por fase
+├── models/                  # Arquivos .pt e .joblib salvos
+└── data/                    # SQLite database
+```
+
 ## API Endpoints
 
 ### Training
