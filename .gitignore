@@ -26,6 +26,10 @@ models/*.joblib
 # Jupyter
 .ipynb_checkpoints/
 
+# MLflow
+mlruns/
+mlflow.db
+
 # Testing
 .coverage
 htmlcov/

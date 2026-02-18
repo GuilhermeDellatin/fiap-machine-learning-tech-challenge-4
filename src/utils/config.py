@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     EPOCHS: int = 100
     EARLY_STOPPING_PATIENCE: int = 10
 
+    # MLflow
+    MLFLOW_TRACKING_URI: str = "sqlite:///./data/mlflow.db"
+    MLFLOW_EXPERIMENT_NAME: str = "stock-prediction-lstm"
+    MLFLOW_ARTIFACT_ROOT: str = "./mlruns"
+
     # API
     API_HOST: str = "0.0.0.0"
     API_PORT: int = 8000

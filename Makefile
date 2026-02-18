@@ -1,4 +1,4 @@
-.PHONY: install init-db train train-quick evaluate run test docker-build docker-run clean
+.PHONY: install init-db train train-quick evaluate run test docker-build docker-run clean mlflow-server mlflow-ui
 
 install:
 	pip install -e ".[dev]"
@@ -29,6 +29,17 @@ docker-build:
 
 docker-run:
 	docker-compose -f docker/docker-compose.yml up
+
+mlflow-server:
+	mlflow server \
+		--host 0.0.0.0 \
+		--port 5000 \
+		--backend-store-uri sqlite:///./data/mlflow.db \
+		--default-artifact-root ./mlruns
+
+mlflow-ui:
+	@echo "MLflow UI disponível em: http://localhost:5000"
+	mlflow ui --port 5000 --backend-store-uri sqlite:///./data/mlflow.db
 
 clean:
 	rm -rf __pycache__ .pytest_cache htmlcov .coverage
