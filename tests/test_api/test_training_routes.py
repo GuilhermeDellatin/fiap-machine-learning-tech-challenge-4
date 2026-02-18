@@ -100,6 +100,7 @@ def test_list_models_with_data(api_client, test_db):
     repo.register_model(
         test_db,
         ticker="AAPL",
+        version_id="AAPL_20240101_120000",
         model_path="models/aapl.pt",
         scaler_path="models/aapl_scaler.joblib",
         metrics={"mae": 0.5},
@@ -128,6 +129,7 @@ def test_activate_model_success(api_client, test_db):
     model = repo.register_model(
         test_db,
         ticker="AAPL",
+        version_id="AAPL_20240101_130000",
         model_path="models/aapl.pt",
         scaler_path="models/aapl_scaler.joblib",
         metrics={},

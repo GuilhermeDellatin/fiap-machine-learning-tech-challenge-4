@@ -46,6 +46,7 @@ def test_predict_with_model(api_client, test_db, trained_model_files):
     model = repo.register_model(
         test_db,
         ticker="AAPL",
+        version_id="AAPL_20240101_150000",
         model_path=model_path,
         scaler_path=scaler_path,
         metrics={"mae": 0.5},

@@ -1,11 +1,14 @@
 """
-Endpoints de treinamento.
+Endpoints de treinamento com integração MLflow.
 """
 import json
 import uuid
-from datetime import datetime
+from contextlib import nullcontext
+from datetime import datetime, timedelta
 from pathlib import Path
 
+import mlflow
+import mlflow.pytorch
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 
@@ -14,6 +17,7 @@ from src.database.connection import SessionLocal
 from src.database.repository import (
     TrainingJobRepository,
     ModelRegistryRepository,
+    PriceCacheRepository,
 )
 from src.data.collector import StockDataCollector
 from src.data.preprocessor import DataPreprocessor
@@ -31,6 +35,7 @@ from src.api.schemas.training import (
 )
 from src.utils.config import settings
 from src.utils.logger import get_logger
+from src.utils.mlflow_setup import setup_mlflow, generate_version_id
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -38,103 +43,243 @@ logger = get_logger(__name__)
 
 def train_model_task(job_id: str, ticker: str, params: dict) -> None:
     """
-    Background task para treinamento.
+    Background task para treinamento com MLflow tracking.
 
-    IMPORTANTE: Esta função roda em background e deve:
-    1. Atualizar status do job no banco
-    2. Sincronizar dados
-    3. Treinar modelo
-    4. Salvar .pt e .joblib
-    5. Registrar no ModelRegistry
-    6. Ativar modelo
+    Esta função é o ORCHESTRATOR para treinos via API.
+    Ela é responsável por:
+    1. Configurar MLflow (com fallback se falhar)
+    2. Gerar version_id consistente
+    3. Gerenciar o ciclo de vida da run
+    4. Registrar no ModelRegistry com o mesmo version_id
+
+    Args:
+        job_id: UUID do job de treinamento
+        ticker: Código da ação
+        params: Dict com hiperparâmetros
     """
     db = SessionLocal()
     job_repo = TrainingJobRepository()
     model_repo = ModelRegistryRepository()
 
+    # =========================================================
+    # 1. CONFIGURAR MLFLOW (com fallback)
+    # =========================================================
+    mlflow_enabled = True
     try:
-        # 1. Status: running
-        job_repo.update_job(db, job_id, status="running", started_at=datetime.utcnow())
-        db.commit()
+        setup_mlflow()
+    except Exception as e:
+        logger.warning(f"Falha ao configurar MLflow: {e}. Continuando sem tracking.")
+        mlflow_enabled = False
 
-        # 2. Coletar dados
-        collector = StockDataCollector()
-        df = collector.sync_data(db, ticker)
+    # =========================================================
+    # 2. GERAR VERSION_ID ANTES DO TREINO
+    # =========================================================
+    version_id = generate_version_id(ticker)
 
-        # 3. Preprocessar
-        preprocessor = DataPreprocessor()
-        scaled = preprocessor.fit_transform(df)
-        X, y = preprocessor.create_sequences(scaled, params["sequence_length"])
-        (X_train, y_train), (X_val, y_val), (X_test, y_test) = preprocessor.split_data(X, y)
+    # Definir paths
+    model_path = f"{settings.MODEL_DIR}/{version_id}.pt"
+    scaler_path = f"{settings.MODEL_DIR}/{version_id}_scaler.joblib"
 
-        # 4. Criar modelo
-        model = LSTMPredictor(
-            input_size=1,
-            hidden_size=params["hidden_size"],
-            num_layers=params["num_layers"],
-            dropout=params["dropout"],
-        )
+    # Garantir diretório
+    Path(settings.MODEL_DIR).mkdir(parents=True, exist_ok=True)
 
-        # 5. Treinar
-        trainer = ModelTrainer(model, learning_rate=params["learning_rate"])
+    # =========================================================
+    # 3. PREPARAR HIPERPARÂMETROS COMPLETOS
+    # =========================================================
+    hyperparams = {
+        "ticker": ticker,
+        "job_id": job_id,
+        "hidden_size": params.get("hidden_size", settings.HIDDEN_SIZE),
+        "num_layers": params.get("num_layers", settings.NUM_LAYERS),
+        "dropout": params.get("dropout", settings.DROPOUT),
+        "learning_rate": params.get("learning_rate", settings.LEARNING_RATE),
+        "sequence_length": params.get("sequence_length", settings.SEQUENCE_LENGTH),
+        "batch_size": params.get("batch_size", settings.BATCH_SIZE),
+        "epochs": params.get("epochs", settings.EPOCHS),
+    }
 
-        train_loader = trainer.create_dataloader(X_train, y_train, params["batch_size"])
-        val_loader = trainer.create_dataloader(X_val, y_val, params["batch_size"], shuffle=False)
-        test_loader = trainer.create_dataloader(X_test, y_test, params["batch_size"], shuffle=False)
+    run_id = None
 
-        def progress_callback(epoch, total_epochs, train_loss, val_loss, best_loss):
+    try:
+        # =========================================================
+        # 4. ABRIR RUN MLFLOW (com fallback nullcontext)
+        # =========================================================
+        if mlflow_enabled:
+            run_context = mlflow.start_run(run_name=version_id)
+        else:
+            run_context = nullcontext()
+
+        with run_context as run:
+            if mlflow_enabled and run:
+                run_id = run.info.run_id
+
+                # Logar parâmetros
+                mlflow.log_params(hyperparams)
+
+                # Tags para organização e rastreabilidade
+                mlflow.set_tags({
+                    "source": "api",
+                    "job_id": job_id,
+                    "ticker": ticker,
+                    "version_id": version_id,
+                })
+
+                logger.info(f"MLflow Run iniciada: {run_id} (version_id={version_id})")
+
+            # =========================================================
+            # 5. ATUALIZAR JOB STATUS: RUNNING
+            # =========================================================
             job_repo.update_job(
                 db, job_id,
-                epochs_completed=epoch,
-                current_loss=val_loss,
-                best_loss=best_loss,
+                status="running",
+                started_at=datetime.utcnow(),
             )
             db.commit()
 
-        history = trainer.train(train_loader, val_loader, params["epochs"], progress_callback)
+            # =========================================================
+            # 6. COLETAR DADOS
+            # =========================================================
+            collector = StockDataCollector()
+            df = collector.sync_data(db, ticker)
 
-        # 6. Avaliar
-        metrics = trainer.evaluate(test_loader)
+            if mlflow_enabled:
+                mlflow.log_metric("dataset_size", len(df))
 
-        # 7. Salvar modelo
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        version_id = f"{ticker}_{timestamp}"
-        model_path = f"{settings.MODEL_DIR}/{version_id}.pt"
-        scaler_path = f"{settings.MODEL_DIR}/{version_id}_scaler.joblib"
+            # =========================================================
+            # 7. PREPROCESSAR
+            # =========================================================
+            preprocessor = DataPreprocessor()
+            scaled = preprocessor.fit_transform(df)
+            X, y = preprocessor.create_sequences(scaled, hyperparams["sequence_length"])
+            (X_train, y_train), (X_val, y_val), (X_test, y_test) = preprocessor.split_data(X, y)
 
-        Path(settings.MODEL_DIR).mkdir(parents=True, exist_ok=True)
-        trainer.save_checkpoint(model_path)
-        preprocessor.save_scaler(scaler_path)
+            if mlflow_enabled:
+                mlflow.log_metrics({
+                    "train_size": len(X_train),
+                    "val_size": len(X_val),
+                    "test_size": len(X_test),
+                })
 
-        # 8. Registrar modelo
-        registered = model_repo.register_model(
-            db, ticker, model_path, scaler_path,
-            metrics, params, history.get("best_epoch", params["epochs"]),
-        )
+            # =========================================================
+            # 8. CRIAR MODELO
+            # =========================================================
+            model = LSTMPredictor(
+                input_size=1,
+                hidden_size=hyperparams["hidden_size"],
+                num_layers=hyperparams["num_layers"],
+                dropout=hyperparams["dropout"],
+            )
 
-        # 9. Ativar modelo
-        model_repo.set_active_model(db, ticker, registered.version_id)
+            # =========================================================
+            # 9. TREINAR (Trainer loga métricas passivamente)
+            # =========================================================
+            trainer = ModelTrainer(model, learning_rate=hyperparams["learning_rate"])
 
-        # 10. Job completed
-        job_repo.update_job(
-            db, job_id,
-            status="completed",
-            completed_at=datetime.utcnow(),
-            model_version_id=registered.version_id,
-        )
-        db.commit()
+            train_loader = trainer.create_dataloader(
+                X_train, y_train, hyperparams["batch_size"]
+            )
+            val_loader = trainer.create_dataloader(
+                X_val, y_val, hyperparams["batch_size"], shuffle=False
+            )
+            test_loader = trainer.create_dataloader(
+                X_test, y_test, hyperparams["batch_size"], shuffle=False
+            )
 
-        logger.info(f"Training completed: {registered.version_id}")
+            # Callback para atualizar progresso no banco
+            def progress_callback(epoch, total_epochs, train_loss, val_loss, best_loss):
+                job_repo.update_job(
+                    db, job_id,
+                    epochs_completed=epoch,
+                    current_loss=val_loss,
+                    best_loss=best_loss,
+                )
+                db.commit()
+
+            history = trainer.train(
+                train_loader, val_loader, hyperparams["epochs"], progress_callback
+            )
+
+            # =========================================================
+            # 10. AVALIAR (Trainer loga métricas passivamente)
+            # =========================================================
+            metrics = trainer.evaluate(test_loader)
+
+            # =========================================================
+            # 11. SALVAR MODELO
+            # =========================================================
+            trainer.save_checkpoint(model_path)
+            preprocessor.save_scaler(scaler_path)
+
+            # =========================================================
+            # 12. LOGAR ARTIFACTS NO MLFLOW
+            # =========================================================
+            if mlflow_enabled:
+                mlflow.log_artifact(model_path, artifact_path="model")
+                mlflow.log_artifact(scaler_path, artifact_path="model")
+
+                # Logar modelo PyTorch como MLflow Model
+                model_cpu = model.cpu()
+                mlflow.pytorch.log_model(
+                    model_cpu,
+                    artifact_path="lstm_model",
+                    registered_model_name=None,
+                )
+
+                # Tag de sucesso
+                mlflow.set_tag("status", "completed")
+
+            # =========================================================
+            # 13. REGISTRAR NO MODELREGISTRY (SQLite)
+            # =========================================================
+            model_repo.register_model(
+                db=db,
+                ticker=ticker,
+                version_id=version_id,  # ← MESMO version_id usado em tudo
+                model_path=model_path,
+                scaler_path=scaler_path,
+                metrics=metrics,
+                hyperparams=hyperparams,
+                epochs=history.get("best_epoch", hyperparams["epochs"]),
+                mlflow_run_id=run_id,  # ← Rastreabilidade
+            )
+
+            # =========================================================
+            # 14. ATIVAR MODELO
+            # =========================================================
+            model_repo.set_active_model(db, ticker, version_id)
+
+            # =========================================================
+            # 15. ATUALIZAR JOB STATUS: COMPLETED
+            # =========================================================
+            job_repo.update_job(
+                db, job_id,
+                status="completed",
+                completed_at=datetime.utcnow(),
+                model_version_id=version_id,
+            )
+            db.commit()
+
+            logger.info(f"Training completed: {version_id} (run_id={run_id})")
 
     except Exception as e:
         logger.error(f"Training failed: {e}")
+
+        # =========================================================
+        # LOGAR FALHA NO MLFLOW (espelho do CLI)
+        # =========================================================
+        if mlflow_enabled and mlflow.active_run():
+            mlflow.set_tag("status", "failed")
+            mlflow.set_tag("error", str(e)[:250])
+
+        # Atualizar job como failed
         job_repo.update_job(
             db, job_id,
             status="failed",
-            error_message=str(e),
+            error_message=str(e)[:500],
             completed_at=datetime.utcnow(),
         )
         db.commit()
+
     finally:
         db.close()
 
@@ -146,9 +291,16 @@ def start_training(
     db: Session = Depends(get_database),
 ):
     """
-    Inicia treinamento em background.
-    Retorna 202 Accepted imediatamente.
+    Inicia treinamento em background com MLflow tracking.
+
+    O job é rastreado em dois lugares:
+    - TrainingJob (SQLite): Status, progresso, erros
+    - MLflow: Métricas, parâmetros, artifacts
+
+    Returns:
+        202 Accepted com job_id
     """
+    # Validar ticker
     collector = get_collector()
     if not collector.validate_ticker(request.ticker):
         raise HTTPException(404, f"Ticker {request.ticker} not found in yfinance")
@@ -173,7 +325,7 @@ def start_training(
     return TrainingResponse(
         job_id=job_id,
         status="accepted",
-        message=f"Training job started for {request.ticker}",
+        message=f"Training job started for {request.ticker}. Track in MLflow UI.",
         ticker=request.ticker,
     )
 

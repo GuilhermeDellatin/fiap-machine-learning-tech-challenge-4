@@ -75,6 +75,7 @@ def test_inference_with_raw_prices(api_client, test_db, trained_model_files):
     model = repo.register_model(
         test_db,
         ticker="AAPL",
+        version_id="AAPL_20240101_140000",
         model_path=model_path,
         scaler_path=scaler_path,
         metrics={},
