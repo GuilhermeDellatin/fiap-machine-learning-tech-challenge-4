@@ -1,6 +1,7 @@
 """
 Testes para os repositórios do banco de dados.
 """
+import json
 import pytest
 import pandas as pd
 from datetime import date, datetime, timedelta
@@ -151,17 +152,19 @@ def test_update_training_job_status(db_session, job_repo):
 
 
 def test_register_model(db_session, model_repo):
-    """Registrar modelo com version_id gerado."""
+    """Registrar modelo com version_id explícito."""
+    version_id = "PETR4.SA_20240101_120000"
     model = model_repo.register_model(
         db_session,
         ticker="PETR4.SA",
+        version_id=version_id,
         model_path="models/PETR4.SA_20240101.pt",
         scaler_path="models/PETR4.SA_20240101_scaler.joblib",
         metrics={"mae": 0.5, "rmse": 0.7, "mape": 2.1, "r2_score": 0.95},
         hyperparams={"hidden_size": 64, "num_layers": 2},
         epochs=100,
     )
-    assert model.version_id.startswith("PETR4.SA_")
+    assert model.version_id == version_id
     assert model.ticker == "PETR4.SA"
     assert model.mae == 0.5
     assert model.is_active is False
@@ -172,6 +175,7 @@ def test_set_active_model(db_session, model_repo):
     m1 = model_repo.register_model(
         db_session,
         ticker="PETR4.SA",
+        version_id="PETR4.SA_20240101_100000",
         model_path="models/m1.pt",
         scaler_path="models/m1_scaler.joblib",
         metrics={},
@@ -179,12 +183,10 @@ def test_set_active_model(db_session, model_repo):
         epochs=50,
     )
 
-    import time
-    time.sleep(1)  # Garantir version_id diferente
-
     m2 = model_repo.register_model(
         db_session,
         ticker="PETR4.SA",
+        version_id="PETR4.SA_20240101_110000",
         model_path="models/m2.pt",
         scaler_path="models/m2_scaler.joblib",
         metrics={},
@@ -210,3 +212,56 @@ def test_get_active_model_returns_none(db_session, model_repo):
     """Sem modelo ativo deve retornar None."""
     result = model_repo.get_active_model(db_session, "VALE3.SA")
     assert result is None
+
+
+def test_register_model_with_explicit_version_id(db_session, model_repo):
+    """register_model deve usar version_id fornecido."""
+    version_id = "AAPL_20240115_143022"
+
+    model = model_repo.register_model(
+        db=db_session,
+        ticker="AAPL",
+        version_id=version_id,
+        model_path="models/AAPL_20240115_143022.pt",
+        scaler_path="models/AAPL_20240115_143022_scaler.joblib",
+        metrics={"mae": 0.5, "rmse": 0.7},
+        hyperparams={"epochs": 100},
+        epochs=100,
+    )
+
+    assert model.version_id == version_id
+    assert model.ticker == "AAPL"
+
+
+def test_register_model_with_mlflow_run_id(db_session, model_repo):
+    """register_model deve armazenar mlflow_run_id nos hyperparameters."""
+    model = model_repo.register_model(
+        db=db_session,
+        ticker="AAPL",
+        version_id="AAPL_20240115_143022",
+        model_path="models/test.pt",
+        scaler_path="models/test.joblib",
+        metrics={},
+        hyperparams={"hidden_size": 64},
+        epochs=50,
+        mlflow_run_id="abc123-def456",
+    )
+
+    params = json.loads(model.hyperparameters)
+    assert params["mlflow_run_id"] == "abc123-def456"
+
+
+def test_register_model_duplicate_version_id_fails(db_session, model_repo):
+    """Tentar registrar version_id duplicado deve falhar.
+
+    NOTA: Este teste depende da constraint UNIQUE em version_id
+    no modelo SQLAlchemy (src/database/models.py).
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    version_id = "AAPL_20240115_143022"
+
+    model_repo.register_model(db_session, "AAPL", version_id, "a.pt", "a.joblib", {}, {}, 50)
+
+    with pytest.raises(IntegrityError):
+        model_repo.register_model(db_session, "AAPL", version_id, "b.pt", "b.joblib", {}, {}, 50)
