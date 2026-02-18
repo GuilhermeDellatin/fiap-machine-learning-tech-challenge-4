@@ -4,7 +4,7 @@ Testes para o treinamento do modelo LSTM.
 import pytest
 import numpy as np
 import torch
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from src.models.lstm_model import LSTMPredictor
 from src.models.trainer import ModelTrainer
@@ -119,3 +119,88 @@ def test_save_and_load_checkpoint(trainer, dummy_data, tmp_path):
     # Verificar que os parametros sao iguais
     for p1, p2 in zip(trainer.model.parameters(), new_trainer.model.parameters()):
         assert torch.allclose(p1, p2)
+
+
+# --- MLflow Logging Tests ---
+
+
+def test_train_without_mlflow_installed(trainer, dummy_data):
+    """Trainer deve funcionar sem MLflow instalado."""
+    X, y = dummy_data
+    train_loader = trainer.create_dataloader(X[:40], y[:40], batch_size=16)
+    val_loader = trainer.create_dataloader(X[40:], y[40:], batch_size=10, shuffle=False)
+
+    with patch("src.models.trainer._MLFLOW_AVAILABLE", False):
+        history = trainer.train(train_loader, val_loader, epochs=2)
+
+    assert "train_losses" in history
+    assert len(history["train_losses"]) == 2
+
+
+def test_train_without_mlflow_active(trainer, dummy_data):
+    """Trainer deve funcionar com MLflow instalado mas sem run ativa."""
+    X, y = dummy_data
+    train_loader = trainer.create_dataloader(X[:40], y[:40], batch_size=16)
+    val_loader = trainer.create_dataloader(X[40:], y[40:], batch_size=10, shuffle=False)
+
+    with patch("src.models.trainer._MLFLOW_AVAILABLE", True):
+        with patch("mlflow.active_run", return_value=None):
+            history = trainer.train(train_loader, val_loader, epochs=2)
+
+    assert "train_losses" in history
+    assert len(history["train_losses"]) == 2
+
+
+def test_train_logs_to_mlflow_when_active(trainer, dummy_data):
+    """Trainer deve logar métricas quando MLflow está ativo."""
+    X, y = dummy_data
+    train_loader = trainer.create_dataloader(X[:40], y[:40], batch_size=16)
+    val_loader = trainer.create_dataloader(X[40:], y[40:], batch_size=10, shuffle=False)
+
+    mock_run = MagicMock()
+
+    with patch("src.models.trainer._MLFLOW_AVAILABLE", True):
+        with patch("mlflow.active_run", return_value=mock_run):
+            with patch("mlflow.log_metric") as mock_log:
+                trainer.train(train_loader, val_loader, epochs=2)
+
+    assert mock_log.called
+    call_args = [call[0][0] for call in mock_log.call_args_list]
+    assert "train_loss" in call_args
+    assert "val_loss" in call_args
+
+
+def test_evaluate_logs_metrics_when_mlflow_active(trainer, dummy_data):
+    """evaluate deve logar métricas quando MLflow está ativo."""
+    X, y = dummy_data
+    test_loader = trainer.create_dataloader(X, y, batch_size=16, shuffle=False)
+
+    mock_run = MagicMock()
+
+    with patch("src.models.trainer._MLFLOW_AVAILABLE", True):
+        with patch("mlflow.active_run", return_value=mock_run):
+            with patch("mlflow.log_metrics") as mock_log:
+                trainer.evaluate(test_loader)
+
+    mock_log.assert_called_once()
+    logged_metrics = mock_log.call_args[0][0]
+    assert "eval_mae" in logged_metrics
+    assert "eval_rmse" in logged_metrics
+    assert "eval_mape" in logged_metrics
+    assert "eval_r2_score" in logged_metrics
+
+
+def test_logging_failure_does_not_break_training(trainer, dummy_data):
+    """Falha no logging não deve quebrar o treino."""
+    X, y = dummy_data
+    train_loader = trainer.create_dataloader(X[:40], y[:40], batch_size=16)
+    val_loader = trainer.create_dataloader(X[40:], y[40:], batch_size=10, shuffle=False)
+
+    mock_run = MagicMock()
+
+    with patch("src.models.trainer._MLFLOW_AVAILABLE", True):
+        with patch("mlflow.active_run", return_value=mock_run):
+            with patch("mlflow.log_metric", side_effect=Exception("MLflow error")):
+                history = trainer.train(train_loader, val_loader, epochs=2)
+
+    assert len(history["train_losses"]) == 2
