@@ -5,6 +5,7 @@ import pytest
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+from unittest.mock import patch, MagicMock
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -130,3 +131,46 @@ def api_client(test_db):
     yield client
 
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def mlflow_active():
+    """Contexto com MLflow instalado e run ativa.
+
+    Uso:
+        def test_something(mlflow_active):
+            # mlflow.active_run() retorna mock
+            # _MLFLOW_AVAILABLE é True
+    """
+    mock_run = MagicMock()
+    mock_run.info.run_id = "test-run-123"
+
+    with patch('src.models.trainer._MLFLOW_AVAILABLE', True), \
+         patch('mlflow.active_run', return_value=mock_run):
+        yield mock_run
+
+
+@pytest.fixture
+def mlflow_inactive():
+    """Contexto sem MLflow ativo.
+
+    Uso:
+        def test_something(mlflow_inactive):
+            # mlflow.active_run() retorna None
+            # _MLFLOW_AVAILABLE é True (instalado, mas sem run)
+    """
+    with patch('src.models.trainer._MLFLOW_AVAILABLE', True), \
+         patch('mlflow.active_run', return_value=None):
+        yield
+
+
+@pytest.fixture
+def mlflow_not_installed():
+    """Contexto com MLflow não instalado.
+
+    Uso:
+        def test_something(mlflow_not_installed):
+            # _MLFLOW_AVAILABLE é False
+    """
+    with patch('src.models.trainer._MLFLOW_AVAILABLE', False):
+        yield

@@ -159,11 +159,82 @@ HIDDEN_SIZE=64
 LOG_LEVEL=INFO
 ```
 
+## MLflow Integration
+
+O projeto utiliza MLflow para rastreamento de experimentos.
+
+### Iniciar MLflow Server
+
+```bash
+make mlflow-server
+```
+
+Acesse a UI em: http://localhost:5000
+
+### Treinar com Tracking
+
+```bash
+# Via CLI
+python scripts/train.py --ticker AAPL --epochs 100
+
+# Via API
+curl -X POST http://localhost:8000/api/v1/training/start \
+  -H "Content-Type: application/json" \
+  -d '{"ticker": "AAPL", "epochs": 50}'
+```
+
+### Desabilitar Tracking
+
+```bash
+# CLI
+python scripts/train.py --ticker AAPL --epochs 50 --no-mlflow
+```
+
+### Arquitetura MLflow
+
+```
+┌─────────────────┐     ┌─────────────────┐
+│   Orchestrator  │────▶│  ModelTrainer   │
+│  (train.py ou   │     │  (passivo)      │
+│   training.py)  │     │                 │
+└────────┬────────┘     └────────┬────────┘
+         │                       │
+         │ mlflow.start_run()    │ mlflow.log_metric()
+         │ mlflow.log_params()   │ (se instalado E run ativa)
+         │ mlflow.log_artifact() │
+         │ mlflow.pytorch.       │
+         │   log_model()         │
+         ▼                       ▼
+┌─────────────────────────────────────────┐
+│              MLflow Server              │
+│  sqlite:///./data/mlflow.db             │
+│  artifacts: ./mlruns                    │
+└─────────────────────────────────────────┘
+```
+
+### Métricas Rastreadas
+
+| Métrica | Descrição |
+|---------|-----------|
+| `train_loss` | Loss de treino por época |
+| `val_loss` | Loss de validação por época |
+| `eval_mae` | MAE no conjunto de teste |
+| `eval_rmse` | RMSE no conjunto de teste |
+| `eval_mape` | MAPE no conjunto de teste |
+| `eval_r2_score` | R² no conjunto de teste |
+
+### Correlação SQLite ↔ MLflow
+
+Cada modelo no `ModelRegistry` (SQLite) tem o `mlflow_run_id` armazenado nos hyperparameters, permitindo navegação bidirecional.
+
 ## Desenvolvimento
 
 ```bash
 # Testes
 make test
+
+# Testes de integração MLflow
+pytest tests/test_integration/ -v -m integration
 
 # Lint
 ruff check src/
