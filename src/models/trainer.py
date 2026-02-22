@@ -12,6 +12,13 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Import protegido — Trainer funciona mesmo sem mlflow instalado
+try:
+    import mlflow
+    _MLFLOW_AVAILABLE = True
+except ImportError:
+    _MLFLOW_AVAILABLE = False
+
 
 class ModelTrainer:
     """Treina modelo LSTM com early stopping e checkpoints."""
@@ -88,8 +95,13 @@ class ModelTrainer:
             history["train_losses"].append(train_loss)
             history["val_losses"].append(val_loss)
 
+            # Logging MLflow (passivo)
+            self._log_epoch_metrics(epoch, train_loss, val_loss)
+
             # Learning rate scheduling
             self.scheduler.step(val_loss)
+            current_lr = self.optimizer.param_groups[0]["lr"]
+            self._log_metric("learning_rate", current_lr, epoch)
 
             # Early stopping check
             if val_loss < self.best_loss:
@@ -120,11 +132,15 @@ class ModelTrainer:
             # Early stopping
             if self.epochs_without_improvement >= self.patience:
                 logger.info(f"Early stopping at epoch {epoch + 1}")
+                self._log_metric("early_stopped_epoch", epoch + 1)
                 break
 
         # Restaurar melhor modelo
         if self.best_model_state:
             self.model.load_state_dict(self.best_model_state)
+
+        # Logar resumo do treino
+        self._log_training_summary(history)
 
         return history
 
@@ -208,7 +224,83 @@ class ModelTrainer:
             f"MAPE={mape:.2f}%, R²={r2:.4f}"
         )
 
+        # Logar métricas de avaliação no MLflow (passivo)
+        self._log_evaluation_metrics(metrics)
+
         return metrics
+
+    def _is_mlflow_active(self) -> bool:
+        """
+        Verifica se MLflow está disponível E há run ativa.
+
+        Checa duas condições:
+        1. _MLFLOW_AVAILABLE (mlflow está instalado)
+        2. mlflow.active_run() (há uma run aberta pelo orchestrator)
+        """
+        return _MLFLOW_AVAILABLE and mlflow.active_run() is not None
+
+    def _log_metric(
+        self,
+        name: str,
+        value: float,
+        step: Optional[int] = None,
+    ) -> None:
+        """
+        Loga métrica no MLflow se houver run ativa.
+
+        Falhas de logging são silenciosas — nunca interrompem o treino.
+        """
+        if not self._is_mlflow_active():
+            return
+
+        try:
+            if step is not None:
+                mlflow.log_metric(name, value, step=step)
+            else:
+                mlflow.log_metric(name, value)
+        except Exception as e:
+            logger.warning(f"Falha ao logar métrica {name}: {e}")
+
+    def _log_epoch_metrics(
+        self,
+        epoch: int,
+        train_loss: float,
+        val_loss: float,
+    ) -> None:
+        """Loga métricas de uma época."""
+        self._log_metric("train_loss", train_loss, step=epoch)
+        self._log_metric("val_loss", val_loss, step=epoch)
+        self._log_metric("best_val_loss", self.best_loss, step=epoch)
+
+    def _log_training_summary(self, history: Dict) -> None:
+        """Loga resumo do treino no MLflow."""
+        if not self._is_mlflow_active():
+            return
+
+        try:
+            mlflow.log_metrics({
+                "final_train_loss": history["train_losses"][-1],
+                "final_val_loss": history["val_losses"][-1],
+                "best_epoch": history["best_epoch"],
+                "total_epochs": len(history["train_losses"]),
+            })
+        except Exception as e:
+            logger.warning(f"Falha ao logar resumo: {e}")
+
+    def _log_evaluation_metrics(self, metrics: Dict) -> None:
+        """Loga métricas de avaliação no MLflow."""
+        if not self._is_mlflow_active():
+            return
+
+        try:
+            mlflow.log_metrics({
+                "eval_mae": metrics["mae"],
+                "eval_rmse": metrics["rmse"],
+                "eval_mape": metrics["mape"],
+                "eval_r2_score": metrics["r2_score"],
+            })
+        except Exception as e:
+            logger.warning(f"Falha ao logar métricas de avaliação: {e}")
 
     def save_checkpoint(self, path: str) -> None:
         """Salva modelo."""

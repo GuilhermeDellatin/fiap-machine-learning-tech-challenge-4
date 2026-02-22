@@ -202,17 +202,38 @@ class ModelRegistryRepository:
         self,
         db: Session,
         ticker: str,
+        version_id: str,
         model_path: str,
         scaler_path: str,
         metrics: dict,
         hyperparams: dict,
         epochs: int,
+        mlflow_run_id: str | None = None,
     ) -> ModelRegistry:
         """
-        Registra modelo. Gera version_id automaticamente.
-        Formato: {ticker}_{timestamp}
+        Registra modelo no banco.
+
+        Args:
+            db: Sessão do SQLAlchemy
+            ticker: Código da ação (ex: "PETR4.SA")
+            version_id: ID único gerado pelo orchestrator.
+                        DEVE ser o mesmo usado no MLflow e nos arquivos.
+            model_path: Caminho do arquivo .pt
+            scaler_path: Caminho do arquivo .joblib
+            metrics: Dict com mae, rmse, mape, r2_score
+            hyperparams: Dict com hiperparâmetros usados
+            epochs: Número de épocas treinadas
+            mlflow_run_id: ID da run MLflow (opcional, para rastreabilidade)
+
+        Returns:
+            ModelRegistry criado
+
+        Raises:
+            IntegrityError: Se version_id já existir (constraint UNIQUE)
         """
-        version_id = f"{ticker}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+        # Adicionar mlflow_run_id aos hyperparams se fornecido
+        if mlflow_run_id:
+            hyperparams = {**hyperparams, "mlflow_run_id": mlflow_run_id}
 
         model = ModelRegistry(
             version_id=version_id,
@@ -224,13 +245,13 @@ class ModelRegistryRepository:
             mape=metrics.get("mape"),
             r2_score=metrics.get("r2_score"),
             epochs_trained=epochs,
-            hyperparameters=json.dumps(hyperparams),
+            hyperparameters=json.dumps(hyperparams) if hyperparams else None,
             is_active=False,
         )
         db.add(model)
         db.commit()
         db.refresh(model)
-        logger.info(f"Registered model {version_id} for {ticker}")
+        logger.info(f"Registered model {version_id} for {ticker} (mlflow_run_id={mlflow_run_id})")
         return model
 
     def get_model(self, db: Session, version_id: str) -> ModelRegistry | None:
