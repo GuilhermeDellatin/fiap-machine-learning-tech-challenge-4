@@ -24,9 +24,8 @@ Sistema de previsão de preços de ações usando redes LSTM com PyTorch, servid
 - [Estrutura do Projeto](#estrutura-do-projeto)
 - [Arquitetura](#arquitetura)
 - [Quick Start](#quick-start)
+  - [Docker (recomendado)](#docker-recomendado)
   - [Instalação Local](#instalação-local)
-  - [Docker](#docker)
-- [Treinar Modelo](#treinar-modelo)
 - [API Endpoints](#api-endpoints)
 - [Configuração](#configuração)
 - [Desenvolvimento](#desenvolvimento)
@@ -102,42 +101,42 @@ O sistema é composto por dois serviços principais orquestrados via Docker Comp
   ┌──────────────────────────────────────────────────────────────────┐
   │                        Docker Compose                            │
   │                                                                  │
-  │   ┌─────────────┐   REST   ┌───────────────────────────────┐    │
-  │   │   Client    │ ────────>│         FastAPI :8000         │    │
-  │   └─────────────┘          │  /training  /predict          │    │
-  │                            │  /inference /health /metrics  │    │
-  │   ┌─────────────┐          └──────────────┬────────────────┘    │
-  │   │  scripts/   │ train.py                │                     │
-  │   │  train.py   │ ──────────────────────> │                     │
-  │   │  (CLI)      │                         │                     │
-  │   └─────────────┘                         │                     │
-  │                              ┌────────────┼────────────┐        │
-  │                              │            │            │        │
-  │                              v            v            v        │
-  │                    ┌─────────────┐  ┌───────────┐ ┌─────────┐  │
-  │                    │    LSTM     │  │  SQLite   │ │ MLflow  │  │
-  │                    │  (PyTorch)  │  │  (db)     │ │ :5000   │  │
-  │                    └──────┬──────┘  │PriceCache │ │runs/    │  │
-  │                           │         │TrainingJob│ │metrics  │  │
-  │                           │         │ModelReg.  │ │artifacts│  │
-  │                           │         └───────────┘ └─────────┘  │
-  │                           │                                     │
-  │                           v                                     │
-  │                    ┌─────────────┐   cache     ┌─────────────┐  │
-  │                    │ Preprocessor│ <────────── │  yfinance   │  │
-  │                    │ MinMaxScaler│  miss→fetch │  (mercado)  │  │
-  │                    └─────────────┘             └─────────────┘  │
+  │   ┌─────────────┐   REST   ┌───────────────────────────────┐     │
+  │   │   Client    │ ────────>│         FastAPI :8000         │     │
+  │   └─────────────┘          │  /training  /predict          │     │
+  │                            │  /inference /health /metrics  │     │
+  │   ┌─────────────┐          └──────────────┬────────────────┘     │
+  │   │  scripts/   │ train.py                │                      │
+  │   │  train.py   │ ──────────────────────> │                      │
+  │   │  (CLI)      │                         │                      │
+  │   └─────────────┘                         │                      │
+  │                              ┌────────────┼────────────┐         │
+  │                              │            │            │         │
+  │                              v            v            v         │
+  │                    ┌─────────────┐  ┌───────────┐ ┌─────────┐    │
+  │                    │    LSTM     │  │  SQLite   │ │ MLflow  │    │
+  │                    │  (PyTorch)  │  │  (db)     │ │ :5000   │    │
+  │                    └──────┬──────┘  │PriceCache │ │runs/    │    │
+  │                           │         │TrainingJob│ │metrics  │    │
+  │                           │         │ModelReg.  │ │artifacts│    │
+  │                           │         └───────────┘ └─────────┘    │
+  │                           │                                      │
+  │                           v                                      │
+  │                    ┌─────────────┐   cache     ┌─────────────┐   │
+  │                    │ Preprocessor│ <────────── │  yfinance   │   │
+  │                    │ MinMaxScaler│  miss→fetch │  (mercado)  │   │
+  │                    └─────────────┘             └─────────────┘   │
   │                                                                  │
-  │   ┌─────────────┐  scrape   ┌─────────────┐                     │
-  │   │  Prometheus │ <──────── │  /metrics   │                     │
-  │   │   :9090     │           │  (endpoint) │                     │
-  │   └──────┬──────┘           └─────────────┘                     │
-  │          │                                                      │
-  │          v                                                      │
-  │   ┌─────────────┐                                               │
-  │   │   Grafana   │                                               │
-  │   │   :3000     │  (perfil: --profile monitoring)               │
-  │   └─────────────┘                                               │
+  │   ┌─────────────┐  scrape   ┌─────────────┐                      │
+  │   │  Prometheus │ <──────── │  /metrics   │                      │
+  │   │   :9090     │           │  (endpoint) │                      │
+  │   └──────┬──────┘           └─────────────┘                      │
+  │          │                                                       │
+  │          v                                                       │
+  │   ┌─────────────┐                                                │
+  │   │   Grafana   │                                                │
+  │   │   :3000     │  (perfil: --profile monitoring)                │
+  │   └─────────────┘                                                │
   └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -159,18 +158,64 @@ O treinamento segue o padrão **Orchestrator**: apenas `train.py` (CLI) e `train
         │  mlflow.pytorch.log_model()                   │
         │                                               ▼
         │                                       ┌─────────────────┐
-        └──────────────────────────────────────▶│  ModelRegistry  │
+        └─────────────────────────────────────▶ │  ModelRegistry  │
                                                 │    (SQLite)     │
                                                 └─────────────────┘
 ```
-
+D
 > Documentação detalhada: [MLFLOW.md](docs/MLFLOW.md)
 
 ---
 
 ## Quick Start
 
+### Docker (recomendado)
+
+A forma mais simples de rodar o projeto. Requer apenas [Docker Desktop](https://www.docker.com/products/docker-desktop/) instalado.
+
+```bash
+# Clonar repositório
+git clone <repo>
+cd stock-prediction-lstm
+
+# Subir API + MLflow
+docker compose -f docker/docker-compose.yml up -d --build
+
+# Subir com monitoramento (Prometheus + Grafana)
+docker compose -f docker/docker-compose.yml --profile monitoring up -d --build
+```
+
+| Serviço | URL |
+|---------|-----|
+| API (Swagger) | http://localhost:8000/docs |
+| MLflow UI | http://localhost:5000 |
+| Prometheus | http://localhost:9090 |
+| Grafana | http://localhost:3000 |
+
+#### Treinar um modelo via API
+
+```bash
+# 1. Iniciar treinamento (retorna 202 imediatamente)
+curl -X POST http://localhost:8000/api/v1/training/start \
+  -H "Content-Type: application/json" \
+  -d '{"ticker": "PETR4.SA", "epochs": 50}'
+
+# 2. Acompanhar status (substituir {job_id} pelo retornado acima)
+curl http://localhost:8000/api/v1/training/status/{job_id}
+
+# 3. Fazer predição após treino concluído
+curl -X POST http://localhost:8000/api/v1/predict \
+  -H "Content-Type: application/json" \
+  -d '{"ticker": "PETR4.SA", "days_ahead": 5}'
+```
+
+> **Atenção:** É necessário ter um modelo treinado para o ticker antes de fazer predições. Caso contrário, a API retorna `404`.
+
+---
+
 ### Instalação Local
+
+Para desenvolvimento e execução fora do Docker. Requer Python 3.11+.
 
 ```bash
 # Clonar repositório
@@ -187,28 +232,9 @@ make init-db
 make run
 ```
 
-### Docker
+### Treinar Modelo Localmente
 
-```bash
-# Subir API + MLflow
-docker compose -f docker/docker-compose.yml up -d --build
-
-# Subir com monitoramento (Prometheus + Grafana)
-docker compose -f docker/docker-compose.yml --profile monitoring up -d --build
-```
-
-| Serviço | URL |
-|---------|-----|
-| API (Swagger) | http://localhost:8000/docs |
-| MLflow UI | http://localhost:5000 |
-| Prometheus | http://localhost:9090 |
-| Grafana | http://localhost:3000 |
-
----
-
-## Treinar Modelo
-
-### Via CLI
+#### Via CLI
 
 ```bash
 # Com tracking MLflow
@@ -226,27 +252,13 @@ python scripts/train.py --ticker PETR4.SA \
   --sequence-length 60
 ```
 
-### Via API
+#### Via API
 
 ```bash
-# Iniciar treinamento (retorna 202 imediatamente)
 curl -X POST http://localhost:8000/api/v1/training/start \
   -H "Content-Type: application/json" \
   -d '{"ticker": "PETR4.SA", "epochs": 50}'
-
-# Verificar status
-curl http://localhost:8000/api/v1/training/status/{job_id}
 ```
-
-### Fazer Predição
-
-```bash
-curl -X POST http://localhost:8000/api/v1/predict \
-  -H "Content-Type: application/json" \
-  -d '{"ticker": "PETR4.SA", "days_ahead": 5}'
-```
-
-> **Atenção:** É necessário ter um modelo treinado para o ticker antes de fazer predições. Caso contrário, a API retorna `404`.
 
 ---
 
