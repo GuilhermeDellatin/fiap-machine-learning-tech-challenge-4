@@ -56,7 +56,21 @@ curl -X POST http://localhost:8000/api/v1/predict \
 ### Docker
 
 ```bash
-docker-compose -f docker/docker-compose.yml up -d
+docker compose -f docker/docker-compose.yml up -d --build
+
+# API
+# http://localhost:8000
+
+# MLflow UI
+# http://localhost:5000
+```
+
+Para validar tracing no MLflow com a API no Docker:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/predict \
+  -H "Content-Type: application/json" \
+  -d '{"ticker":"AAPL","days_ahead":1}'
 ```
 
 ## Estrutura do Projeto

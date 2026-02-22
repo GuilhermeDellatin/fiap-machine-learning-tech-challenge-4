@@ -36,6 +36,7 @@ from src.api.schemas.training import (
 from src.utils.config import settings
 from src.utils.logger import get_logger
 from src.utils.mlflow_setup import setup_mlflow, generate_version_id
+from src.utils.mlflow_tracing import trace_span, set_span_attribute, set_span_error
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -139,8 +140,9 @@ def train_model_task(job_id: str, ticker: str, params: dict) -> None:
             # =========================================================
             # 6. COLETAR DADOS
             # =========================================================
-            collector = StockDataCollector()
-            df = collector.sync_data(db, ticker)
+            with trace_span("training.collect_data", attributes={"ticker": ticker}):
+                collector = StockDataCollector()
+                df = collector.sync_data(db, ticker)
 
             if mlflow_enabled:
                 mlflow.log_metric("dataset_size", len(df))
@@ -148,10 +150,14 @@ def train_model_task(job_id: str, ticker: str, params: dict) -> None:
             # =========================================================
             # 7. PREPROCESSAR
             # =========================================================
-            preprocessor = DataPreprocessor()
-            scaled = preprocessor.fit_transform(df)
-            X, y = preprocessor.create_sequences(scaled, hyperparams["sequence_length"])
-            (X_train, y_train), (X_val, y_val), (X_test, y_test) = preprocessor.split_data(X, y)
+            with trace_span(
+                "training.preprocess_data",
+                attributes={"ticker": ticker, "sequence_length": str(hyperparams["sequence_length"])},
+            ):
+                preprocessor = DataPreprocessor()
+                scaled = preprocessor.fit_transform(df)
+                X, y = preprocessor.create_sequences(scaled, hyperparams["sequence_length"])
+                (X_train, y_train), (X_val, y_val), (X_test, y_test) = preprocessor.split_data(X, y)
 
             if mlflow_enabled:
                 mlflow.log_metrics({
@@ -195,20 +201,29 @@ def train_model_task(job_id: str, ticker: str, params: dict) -> None:
                 )
                 db.commit()
 
-            history = trainer.train(
-                train_loader, val_loader, hyperparams["epochs"], progress_callback
-            )
+            with trace_span(
+                "training.train_model",
+                attributes={"ticker": ticker, "epochs": str(hyperparams["epochs"])},
+            ):
+                history = trainer.train(
+                    train_loader, val_loader, hyperparams["epochs"], progress_callback
+                )
 
             # =========================================================
             # 10. AVALIAR (Trainer loga métricas passivamente)
             # =========================================================
-            metrics = trainer.evaluate(test_loader)
+            with trace_span("training.evaluate_model", attributes={"ticker": ticker}):
+                metrics = trainer.evaluate(test_loader)
 
             # =========================================================
             # 11. SALVAR MODELO
             # =========================================================
-            trainer.save_checkpoint(model_path)
-            preprocessor.save_scaler(scaler_path)
+            with trace_span(
+                "training.save_artifacts",
+                attributes={"version_id": version_id, "model_path": model_path},
+            ):
+                trainer.save_checkpoint(model_path)
+                preprocessor.save_scaler(scaler_path)
 
             # =========================================================
             # 12. LOGAR ARTIFACTS NO MLFLOW
@@ -231,17 +246,21 @@ def train_model_task(job_id: str, ticker: str, params: dict) -> None:
             # =========================================================
             # 13. REGISTRAR NO MODELREGISTRY (SQLite)
             # =========================================================
-            model_repo.register_model(
-                db=db,
-                ticker=ticker,
-                version_id=version_id,  # ← MESMO version_id usado em tudo
-                model_path=model_path,
-                scaler_path=scaler_path,
-                metrics=metrics,
-                hyperparams=hyperparams,
-                epochs=history.get("best_epoch", hyperparams["epochs"]),
-                mlflow_run_id=run_id,  # ← Rastreabilidade
-            )
+            with trace_span(
+                "training.register_model",
+                attributes={"version_id": version_id, "ticker": ticker},
+            ):
+                model_repo.register_model(
+                    db=db,
+                    ticker=ticker,
+                    version_id=version_id,  # ← MESMO version_id usado em tudo
+                    model_path=model_path,
+                    scaler_path=scaler_path,
+                    metrics=metrics,
+                    hyperparams=hyperparams,
+                    epochs=history.get("best_epoch", hyperparams["epochs"]),
+                    mlflow_run_id=run_id,  # ← Rastreabilidade
+                )
 
             # =========================================================
             # 14. ATIVAR MODELO

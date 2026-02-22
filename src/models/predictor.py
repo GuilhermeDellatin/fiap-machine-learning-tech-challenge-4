@@ -10,6 +10,7 @@ from src.models.lstm_model import LSTMPredictor
 from src.data.preprocessor import DataPreprocessor
 from src.utils.config import settings
 from src.utils.logger import get_logger
+from src.utils.mlflow_tracing import trace_span, set_span_attribute
 
 logger = get_logger(__name__)
 
@@ -56,15 +57,19 @@ class StockPredictor:
         from src.database.repository import ModelRegistryRepository
 
         repo = ModelRegistryRepository()
-        model_info = repo.get_active_model(db, ticker)
 
-        if model_info is None:
-            logger.warning(f"No active model for {ticker}")
-            return False
+        with trace_span("predictor.load_from_registry", attributes={"ticker": ticker}) as span:
+            model_info = repo.get_active_model(db, ticker)
 
-        self.reload_model(model_info.model_path, model_info.scaler_path)
-        self.current_ticker = ticker
-        self.model_version = model_info.version_id
+            if model_info is None:
+                logger.warning(f"No active model for {ticker}")
+                set_span_attribute(span, "result", "no_model")
+                return False
+
+            set_span_attribute(span, "version_id", model_info.version_id)
+            self.reload_model(model_info.model_path, model_info.scaler_path)
+            self.current_ticker = ticker
+            self.model_version = model_info.version_id
 
         return True
 
@@ -117,27 +122,34 @@ class StockPredictor:
         sequence_length = settings.SEQUENCE_LENGTH
         data = historical_data.copy()
 
-        for _ in range(days_ahead):
-            # Preparar input
-            input_tensor = self.preprocessor.prepare_for_inference(
-                data, sequence_length
-            )
-            input_tensor = torch.FloatTensor(input_tensor).to(self.device)
+        with trace_span(
+            "predictor.predict",
+            attributes={
+                "ticker": str(self.current_ticker),
+                "days_ahead": str(days_ahead),
+            },
+        ):
+            for _ in range(days_ahead):
+                # Preparar input
+                input_tensor = self.preprocessor.prepare_for_inference(
+                    data, sequence_length
+                )
+                input_tensor = torch.FloatTensor(input_tensor).to(self.device)
 
-            # Inferência
-            with torch.no_grad():
-                scaled_pred = self.model(input_tensor)
+                # Inferência
+                with torch.no_grad():
+                    scaled_pred = self.model(input_tensor)
 
-            # Inverter normalização
-            pred_value = self.preprocessor.inverse_transform(
-                scaled_pred.cpu().numpy()
-            )[0]
-            predictions.append(float(pred_value))
+                # Inverter normalização
+                pred_value = self.preprocessor.inverse_transform(
+                    scaled_pred.cpu().numpy()
+                )[0]
+                predictions.append(float(pred_value))
 
-            # Adicionar predição aos dados para próxima iteração
-            new_row = data.iloc[-1:].copy()
-            new_row["Close"] = pred_value
-            data = pd.concat([data, new_row], ignore_index=True)
+                # Adicionar predição aos dados para próxima iteração
+                new_row = data.iloc[-1:].copy()
+                new_row["Close"] = pred_value
+                data = pd.concat([data, new_row], ignore_index=True)
 
         return predictions
 
@@ -154,8 +166,12 @@ class StockPredictor:
         if not self.is_loaded():
             raise ModelNotLoadedError("Model not loaded.")
 
-        with torch.no_grad():
-            return self.model(input_tensor.to(self.device))
+        with trace_span(
+            "predictor.inference",
+            attributes={"ticker": str(self.current_ticker)},
+        ):
+            with torch.no_grad():
+                return self.model(input_tensor.to(self.device))
 
     def is_loaded(self) -> bool:
         """Verifica se modelo está carregado."""

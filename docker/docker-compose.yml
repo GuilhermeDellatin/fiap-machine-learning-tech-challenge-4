@@ -1,21 +1,56 @@
-version: '3.8'
-
 services:
+  mlflow:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command:
+      - mlflow
+      - server
+      - --host
+      - 0.0.0.0
+      - --port
+      - "5000"
+      - --backend-store-uri
+      - sqlite:///./data/mlflow.db
+      - --default-artifact-root
+      - /app/mlruns
+      - --allowed-hosts
+      - mlflow,mlflow:5000,localhost,localhost:5000,127.0.0.1,127.0.0.1:5000
+    ports:
+      - "5000:5000"
+    volumes:
+      - ../data:/app/data
+      - ../mlruns:/app/mlruns
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
   api:
     build:
       context: ..
       dockerfile: docker/Dockerfile
     ports:
       - "8000:8000"
+    depends_on:
+      mlflow:
+        condition: service_healthy
     volumes:
       - ../models:/app/models
       - ../data:/app/data
+      - ../mlruns:/app/mlruns
     environment:
       - DATABASE_URL=sqlite:///./data/stock_cache.db
       - CACHE_EXPIRY_HOURS=24
       - LOG_LEVEL=INFO
       - MODEL_DIR=models
       - DATA_DIR=data
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - MLFLOW_EXPERIMENT_NAME=stock-prediction-lstm
+      - MLFLOW_ARTIFACT_ROOT=/app/mlruns
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -51,3 +86,4 @@ services:
 volumes:
   models:
   data:
+  mlruns:

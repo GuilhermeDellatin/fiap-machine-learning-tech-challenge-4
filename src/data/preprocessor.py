@@ -8,6 +8,7 @@ from sklearn.preprocessing import MinMaxScaler
 from typing import Tuple
 
 from src.utils.logger import get_logger
+from src.utils.mlflow_tracing import trace_span, set_span_attribute
 
 logger = get_logger(__name__)
 
@@ -32,11 +33,15 @@ class DataPreprocessor:
         Returns:
             Array normalizado (n_samples, 1)
         """
-        values = data[feature_col].values.reshape(-1, 1)
-        scaled = self.scaler.fit_transform(values)
-        self._is_fitted = True
-        logger.info(f"Scaler fitted. Range: [{values.min():.2f}, {values.max():.2f}]")
-        return scaled
+        with trace_span("preprocessor.fit_transform", attributes={"feature_col": feature_col}) as span:
+            values = data[feature_col].values.reshape(-1, 1)
+            scaled = self.scaler.fit_transform(values)
+            self._is_fitted = True
+            set_span_attribute(span, "n_samples", str(len(values)))
+            set_span_attribute(span, "value_min", str(round(float(values.min()), 4)))
+            set_span_attribute(span, "value_max", str(round(float(values.max()), 4)))
+            logger.info(f"Scaler fitted. Range: [{values.min():.2f}, {values.max():.2f}]")
+            return scaled
 
     def transform(
         self, data: pd.DataFrame, feature_col: str = "Close"
@@ -67,17 +72,22 @@ class DataPreprocessor:
             X: (n_sequences, sequence_length, 1)
             y: (n_sequences, 1)
         """
-        X, y = [], []
+        with trace_span(
+            "preprocessor.create_sequences",
+            attributes={"sequence_length": str(sequence_length), "n_samples": str(len(data))},
+        ) as span:
+            X, y = [], []
 
-        for i in range(len(data) - sequence_length):
-            X.append(data[i : (i + sequence_length)])
-            y.append(data[i + sequence_length])
+            for i in range(len(data) - sequence_length):
+                X.append(data[i : (i + sequence_length)])
+                y.append(data[i + sequence_length])
 
-        X = np.array(X)
-        y = np.array(y)
+            X = np.array(X)
+            y = np.array(y)
 
-        logger.info(f"Sequences created: X={X.shape}, y={y.shape}")
-        return X, y
+            set_span_attribute(span, "n_sequences", str(len(X)))
+            logger.info(f"Sequences created: X={X.shape}, y={y.shape}")
+            return X, y
 
     def split_data(
         self,
