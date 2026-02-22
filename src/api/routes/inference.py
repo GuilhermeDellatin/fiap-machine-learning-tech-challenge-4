@@ -191,10 +191,10 @@ def warmup(db: Session = Depends(get_database)):
             device="unknown",
         )
 
-    # Dummy inference
+    # Very Simple inference
     start_time = time.time()
-    dummy = torch.randn(1, settings.SEQUENCE_LENGTH, 1)
-    predictor.inference(dummy)
+    warmup_input = torch.randn(1, settings.SEQUENCE_LENGTH, 1)
+    predictor.inference(warmup_input)
     inference_time = (time.time() - start_time) * 1000
 
     return WarmupResponse(
