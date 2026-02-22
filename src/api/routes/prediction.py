@@ -131,17 +131,6 @@ def predict(
     )
 
 
-@router.get("/predict/{ticker}", response_model=PredictionResponse)
-def predict_get(
-        ticker: str,
-        days_ahead: int = 1,
-        db: Session = Depends(get_database),
-):
-    """Predição via GET."""
-    request = PredictionRequest(ticker=ticker, days_ahead=days_ahead)
-    return predict(request, db)
-
-
 @router.post("/predict/batch", response_model=BatchPredictionResponse)
 def predict_batch(
         request: BatchPredictionRequest,
