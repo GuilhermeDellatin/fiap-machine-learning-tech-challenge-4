@@ -12,6 +12,7 @@ from src.database.repository import PriceCacheRepository
 from src.monitoring.metrics import record_cache_hit, record_cache_miss
 from src.utils.config import settings
 from src.utils.logger import get_logger
+from src.utils.mlflow_tracing import trace_span, set_span_attribute
 
 logger = get_logger(__name__)
 
@@ -62,25 +63,36 @@ class StockDataCollector:
         start = datetime.strptime(start_date, "%Y-%m-%d").date()
         end = datetime.strptime(end_date, "%Y-%m-%d").date()
 
-        # 1. Verificar cache
-        if self.cache_repo.is_cache_valid(
-            db, ticker, start, end,
-            max_age_hours=settings.CACHE_EXPIRY_HOURS
-        ):
-            logger.info(f"Cache HIT para {ticker}")
-            record_cache_hit(ticker)
-            return self._get_from_cache(db, ticker, start, end)
+        with trace_span(
+            "collector.download_data",
+            attributes={
+                "ticker": ticker,
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+        ) as span:
+            # 1. Verificar cache
+            if self.cache_repo.is_cache_valid(
+                db, ticker, start, end,
+                max_age_hours=settings.CACHE_EXPIRY_HOURS
+            ):
+                logger.info(f"Cache HIT para {ticker}")
+                record_cache_hit(ticker)
+                set_span_attribute(span, "cache_hit", "true")
+                return self._get_from_cache(db, ticker, start, end)
 
-        # 2. Cache miss - baixar do yfinance
-        logger.info(f"Cache MISS para {ticker} - baixando do yfinance")
-        record_cache_miss(ticker)
-        df = self._download_from_yfinance(ticker, start_date, end_date)
+            # 2. Cache miss - baixar do yfinance
+            logger.info(f"Cache MISS para {ticker} - baixando do yfinance")
+            record_cache_miss(ticker)
+            set_span_attribute(span, "cache_hit", "false")
+            df = self._download_from_yfinance(ticker, start_date, end_date)
 
-        # 3. Salvar no cache
-        saved = self.cache_repo.save_prices(db, ticker, df)
-        logger.info(f"Salvos {saved} registros no cache para {ticker}")
+            # 3. Salvar no cache
+            saved = self.cache_repo.save_prices(db, ticker, df)
+            logger.info(f"Salvos {saved} registros no cache para {ticker}")
+            set_span_attribute(span, "records_saved", str(saved))
 
-        return df
+            return df
 
     def sync_data(self, db: Session, ticker: str, years: int = 5) -> pd.DataFrame:
         """

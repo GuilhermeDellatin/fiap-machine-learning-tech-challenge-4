@@ -19,6 +19,7 @@ from src.api.schemas.inference import (
     WarmupResponse,
 )
 from src.utils.config import settings
+from src.utils.mlflow_tracing import trace_span, set_span_attribute, set_span_error
 
 router = APIRouter()
 
@@ -32,45 +33,59 @@ def inference(
     predictor = get_predictor()
     model_repo = ModelRegistryRepository()
 
-    # Carregar modelo se necessário
-    model_info = model_repo.get_active_model(db, request.ticker.upper())
-    if not model_info:
-        raise HTTPException(404, f"No model for {request.ticker}")
+    with trace_span(
+        "inference_request",
+        "CHAIN",
+        {"ticker": request.ticker.upper()},
+    ) as root_span:
+        # Carregar modelo se necessário
+        with trace_span("check_model_registry", attributes={"ticker": request.ticker.upper()}):
+            model_info = model_repo.get_active_model(db, request.ticker.upper())
 
-    if not predictor.is_loaded() or predictor.current_ticker != request.ticker.upper():
-        predictor.reload_model(model_info.model_path, model_info.scaler_path)
-        predictor.current_ticker = request.ticker.upper()
-        predictor.model_version = model_info.version_id
+        if not model_info:
+            set_span_error(root_span, f"No model for {request.ticker}")
+            raise HTTPException(404, f"No model for {request.ticker}")
 
-    start_time = time.time()
+        if not predictor.is_loaded() or predictor.current_ticker != request.ticker.upper():
+            with trace_span("load_model", attributes={"version_id": model_info.version_id}):
+                predictor.reload_model(model_info.model_path, model_info.scaler_path)
+                predictor.current_ticker = request.ticker.upper()
+                predictor.model_version = model_info.version_id
 
-    if request.raw_prices:
-        # Preprocessar preços brutos
-        df = pd.DataFrame({"Close": request.raw_prices})
-        predictions = predictor.predict(df, days_ahead=1)
-        prediction = predictions[0]
-        is_normalized = False
-    else:
-        # Dados já normalizados
-        input_tensor = torch.FloatTensor(request.data).unsqueeze(0)
-        output = predictor.inference(input_tensor)
-        prediction = float(output.cpu().numpy()[0][0])
-        is_normalized = request.return_normalized
+        set_span_attribute(root_span, "model_version", model_info.version_id)
 
-        if not request.return_normalized:
-            prediction = float(
-                predictor.preprocessor.inverse_transform(np.array([[prediction]]))[0]
-            )
+        start_time = time.time()
 
-    inference_time = (time.time() - start_time) * 1000
+        if request.raw_prices:
+            # Preprocessar preços brutos
+            with trace_span("preprocess_and_predict", attributes={"mode": "raw_prices"}):
+                df = pd.DataFrame({"Close": request.raw_prices})
+                predictions = predictor.predict(df, days_ahead=1)
+                prediction = predictions[0]
+            is_normalized = False
+        else:
+            # Dados já normalizados
+            with trace_span("direct_inference", attributes={"mode": "normalized"}):
+                input_tensor = torch.FloatTensor(request.data).unsqueeze(0)
+                output = predictor.inference(input_tensor)
+                prediction = float(output.cpu().numpy()[0][0])
+                is_normalized = request.return_normalized
 
-    return InferenceResponse(
-        ticker=request.ticker.upper(),
-        prediction=prediction,
-        is_normalized=is_normalized,
-        model_version=predictor.model_version,
-        inference_time_ms=round(inference_time, 2),
-    )
+                if not request.return_normalized:
+                    prediction = float(
+                        predictor.preprocessor.inverse_transform(np.array([[prediction]]))[0]
+                    )
+
+        inference_time = (time.time() - start_time) * 1000
+        set_span_attribute(root_span, "inference_time_ms", str(round(inference_time, 2)))
+
+        return InferenceResponse(
+            ticker=request.ticker.upper(),
+            prediction=prediction,
+            is_normalized=is_normalized,
+            model_version=predictor.model_version,
+            inference_time_ms=round(inference_time, 2),
+        )
 
 
 @router.post("/batch", response_model=BatchInferenceResponse)

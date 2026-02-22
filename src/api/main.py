@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.database.connection import init_db
 from src.utils.config import settings
 from src.utils.logger import get_logger
+from src.utils.mlflow_setup import setup_mlflow
 
 logger = get_logger(__name__)
 
@@ -19,6 +20,17 @@ async def lifespan(app: FastAPI):
     logger.info("Starting up...")
     init_db()
     logger.info("Database initialized")
+    try:
+        experiment_id = setup_mlflow()
+        logger.info(
+            "MLflow initialized "
+            f"(experiment_id={experiment_id}, tracking_uri={settings.MLFLOW_TRACKING_URI})"
+        )
+    except Exception as e:
+        logger.warning(
+            "MLflow initialization failed at startup. "
+            f"API will continue without MLflow until it becomes available: {e}"
+        )
 
     yield
 
