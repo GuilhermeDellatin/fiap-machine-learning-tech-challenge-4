@@ -255,18 +255,22 @@ def train_model_task(job_id: str, ticker: str, params: dict) -> None:
                     # =========================================================
                     if mlflow_enabled:
                         with tracing.artifact_logging(model_path, scaler_path) as span:
-                            mlflow.log_artifact(model_path, artifact_path="model")
-                            mlflow.log_artifact(scaler_path, artifact_path="model")
+                            try:
+                                mlflow.log_artifact(model_path, artifact_path="model")
+                                mlflow.log_artifact(scaler_path, artifact_path="model")
 
-                            model_cpu = model.cpu()
-                            mlflow.pytorch.log_model(
-                                model_cpu,
-                                artifact_path="lstm_model",
-                                registered_model_name=None,
-                            )
+                                model_cpu = model.cpu()
+                                mlflow.pytorch.log_model(
+                                    model_cpu,
+                                    artifact_path="lstm_model",
+                                    registered_model_name=None,
+                                )
+                                span.set_outputs({"artifacts_logged": True})
+                            except Exception as artifact_err:
+                                logger.warning(f"Falha ao logar artifacts no MLflow (não crítico): {artifact_err}")
+                                span.set_outputs({"artifacts_logged": False, "error": str(artifact_err)})
 
                             mlflow.set_tag("status", "completed")
-                            span.set_outputs({"artifacts_logged": True})
 
                     # =========================================================
                     # 13. REGISTRAR NO MODELREGISTRY (SQLite)

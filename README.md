@@ -59,7 +59,7 @@ curl -X POST http://localhost:8000/api/v1/predict \
 docker compose -f docker/docker-compose.yml up -d --build
 
 # API
-# http://localhost:8000
+# http://localhost:8000/docs
 
 # MLflow UI
 # http://localhost:5000
@@ -144,15 +144,46 @@ stock-prediction-lstm/
 ## Arquitetura
 
 ```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Client    │────>│   FastAPI   │────>│   SQLite    │
-└─────────────┘     └─────────────┘     └─────────────┘
-                           │
-                           v
-                    ┌─────────────┐     ┌─────────────┐
-                    │   LSTM      │<────│  yfinance   │
-                    │  (PyTorch)  │     │   (cache)   │
-                    └─────────────┘     └─────────────┘
+  ┌──────────────────────────────────────────────────────────────────┐
+  │                        Docker Compose                            │
+  │                                                                  │
+  │   ┌─────────────┐   REST   ┌───────────────────────────────┐     │
+  │   │   Client    │ ────────>│         FastAPI :8000         │     │
+  │   └─────────────┘          │  /training  /predict          │     │
+  │                            │  /inference /health /metrics  │     │
+  │   ┌─────────────┐          └──────────────┬────────────────┘     │
+  │   │  scripts/   │ train.py                │                      │
+  │   │  train.py   │ ──────────────────────> │                      │
+  │   │  (CLI)      │                         │                      │
+  │   └─────────────┘                         │                      │
+  │                              ┌────────────┼────────────┐         │
+  │                              │            │            │         │
+  │                              v            v            v         │
+  │                    ┌─────────────┐  ┌───────────┐ ┌─────────┐    │
+  │                    │    LSTM     │  │  SQLite   │ │ MLflow  │    │
+  │                    │  (PyTorch)  │  │:8000(db)  │ │ :5000   │    │
+  │                    └──────┬──────┘  │PriceCache │ │runs/    │    │
+  │                           │         │TrainingJob│ │metrics  │    │
+  │                           │         │ModelReg.  │ │artifacts│    │
+  │                           │         └───────────┘ └─────────┘    │
+  │                           │                                      │
+  │                           v                                      │
+  │                    ┌─────────────┐   cache     ┌─────────────┐   │
+  │                    │ Preprocessor│ <────────── │  yfinance   │   │
+  │                    │ MinMaxScaler│  miss→fetch │  (mercado)  │   │
+  │                    └─────────────┘             └─────────────┘   │
+  │                                                                  │
+  │   ┌─────────────┐  scrape   ┌─────────────┐                      │
+  │   │  Prometheus │ <──────── │  /metrics   │                      │
+  │   │   :9090     │           │  (endpoint) │                      │
+  │   └──────┬──────┘           └─────────────┘                      │
+  │          │                                                       │
+  │          v                                                       │
+  │   ┌─────────────┐                                                │
+  │   │   Grafana   │                                                │
+  │   │   :3000     │                                                │
+  │   └─────────────┘   (perfil: --profile monitoring)               │
+  └──────────────────────────────────────────────────────────────────┘
 ```
 
 ## Cache
