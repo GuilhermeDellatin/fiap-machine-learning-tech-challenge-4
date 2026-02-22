@@ -1,5 +1,5 @@
 """
-Endpoints de inferência direta.
+Endpoints de inferência direta com MLflow tracing.
 """
 import time
 
@@ -19,53 +19,77 @@ from src.api.schemas.inference import (
     WarmupResponse,
 )
 from src.utils.config import settings
-from src.utils.mlflow_tracing import trace_span, set_span_attribute, set_span_error
+from src.utils.logger import get_logger
+from src.utils.mlflow_tracing import tracing
 
 router = APIRouter()
+logger = get_logger(__name__)
 
 
 @router.post("", response_model=InferenceResponse)
 def inference(
-    request: InferenceRequest,
-    db: Session = Depends(get_database),
+        request: InferenceRequest,
+        db: Session = Depends(get_database),
 ):
-    """Inferência direta."""
+    """Inferência direta com MLflow tracing."""
     predictor = get_predictor()
     model_repo = ModelRegistryRepository()
 
-    with trace_span(
-        "inference_request",
-        "CHAIN",
-        {"ticker": request.ticker.upper()},
+    with tracing.safe_span(
+            "inference_pipeline",
+            inputs={
+                "ticker": request.ticker,
+                "has_raw_prices": request.raw_prices is not None,
+                "return_normalized": request.return_normalized,
+                "data_length": len(request.data) if request.data else (
+                        len(request.raw_prices) if request.raw_prices else 0
+                ),
+            },
     ) as root_span:
+
         # Carregar modelo se necessário
-        with trace_span("check_model_registry", attributes={"ticker": request.ticker.upper()}):
+        with tracing.load_model(request.ticker.upper()) as span:
             model_info = model_repo.get_active_model(db, request.ticker.upper())
+            if not model_info:
+                span.set_attributes({"error": "no_model_found"})
+                raise HTTPException(404, f"No model for {request.ticker}")
 
-        if not model_info:
-            set_span_error(root_span, f"No model for {request.ticker}")
-            raise HTTPException(404, f"No model for {request.ticker}")
-
-        if not predictor.is_loaded() or predictor.current_ticker != request.ticker.upper():
-            with trace_span("load_model", attributes={"version_id": model_info.version_id}):
+            model_reloaded = False
+            if not predictor.is_loaded() or predictor.current_ticker != request.ticker.upper():
+                start_load = time.time()
                 predictor.reload_model(model_info.model_path, model_info.scaler_path)
                 predictor.current_ticker = request.ticker.upper()
                 predictor.model_version = model_info.version_id
+                model_reloaded = True
+                span.set_attributes({"model_load_time_ms": (time.time() - start_load) * 1000})
 
-        set_span_attribute(root_span, "model_version", model_info.version_id)
+            span.set_outputs({
+                "model_version": model_info.version_id,
+                "model_reloaded": model_reloaded,
+            })
 
-        start_time = time.time()
-
+        # Inferência
         if request.raw_prices:
-            # Preprocessar preços brutos
-            with trace_span("preprocess_and_predict", attributes={"mode": "raw_prices"}):
+            with tracing.inference("raw_prices", prices_count=len(request.raw_prices)) as span:
+                start_time = time.time()
                 df = pd.DataFrame({"Close": request.raw_prices})
                 predictions = predictor.predict(df, days_ahead=1)
                 prediction = predictions[0]
-            is_normalized = False
+                is_normalized = False
+                inference_time = (time.time() - start_time) * 1000
+                span.set_outputs({
+                    "prediction": prediction,
+                    "is_normalized": is_normalized,
+                    "inference_time_ms": round(inference_time, 2),
+                })
+                span.set_attributes({"inference_time_ms": inference_time})
         else:
-            # Dados já normalizados
-            with trace_span("direct_inference", attributes={"mode": "normalized"}):
+            with tracing.inference(
+                    "normalized_data",
+                    sequence_length=len(request.data),
+                    return_normalized=request.return_normalized,
+            ) as span:
+                start_time = time.time()
                 input_tensor = torch.FloatTensor(request.data).unsqueeze(0)
                 output = predictor.inference(input_tensor)
                 prediction = float(output.cpu().numpy()[0][0])
@@ -76,41 +100,76 @@ def inference(
                         predictor.preprocessor.inverse_transform(np.array([[prediction]]))[0]
                     )
 
-        inference_time = (time.time() - start_time) * 1000
-        set_span_attribute(root_span, "inference_time_ms", str(round(inference_time, 2)))
+                inference_time = (time.time() - start_time) * 1000
+                span.set_outputs({
+                    "prediction": prediction,
+                    "is_normalized": is_normalized,
+                    "inference_time_ms": round(inference_time, 2),
+                })
+                span.set_attributes({"inference_time_ms": inference_time})
 
-        return InferenceResponse(
-            ticker=request.ticker.upper(),
-            prediction=prediction,
-            is_normalized=is_normalized,
-            model_version=predictor.model_version,
-            inference_time_ms=round(inference_time, 2),
-        )
+        if root_span:
+            root_span.set_outputs({
+                "ticker": request.ticker.upper(),
+                "prediction": prediction,
+                "is_normalized": is_normalized,
+                "model_version": predictor.model_version,
+                "inference_time_ms": round(inference_time, 2),
+            })
+
+    return InferenceResponse(
+        ticker=request.ticker.upper(),
+        prediction=prediction,
+        is_normalized=is_normalized,
+        model_version=predictor.model_version,
+        inference_time_ms=round(inference_time, 2),
+    )
 
 
 @router.post("/batch", response_model=BatchInferenceResponse)
 def batch_inference(
-    request: BatchInferenceRequest,
-    db: Session = Depends(get_database),
+        request: BatchInferenceRequest,
+        db: Session = Depends(get_database),
 ):
-    """Batch inference."""
+    """Batch inference com MLflow tracing."""
     predictor = get_predictor()
     model_repo = ModelRegistryRepository()
 
-    model_info = model_repo.get_active_model(db, request.ticker.upper())
-    if not model_info:
-        raise HTTPException(404, f"No model for {request.ticker}")
+    with tracing.safe_span(
+            "batch_inference_pipeline",
+            inputs={"ticker": request.ticker.upper(), "batch_size": len(request.sequences)},
+    ) as root_span:
 
-    if not predictor.is_loaded():
-        predictor.reload_model(model_info.model_path, model_info.scaler_path)
+        with tracing.load_model(request.ticker.upper()) as span:
+            model_info = model_repo.get_active_model(db, request.ticker.upper())
+            if not model_info:
+                span.set_attributes({"error": "no_model_found"})
+                raise HTTPException(404, f"No model for {request.ticker}")
 
-    start_time = time.time()
+            if not predictor.is_loaded():
+                predictor.reload_model(model_info.model_path, model_info.scaler_path)
 
-    input_tensor = torch.FloatTensor(request.sequences)
-    output = predictor.inference(input_tensor)
-    predictions = output.cpu().numpy().flatten().tolist()
+            span.set_outputs({"model_version": model_info.version_id})
 
-    inference_time = (time.time() - start_time) * 1000
+        with tracing.batch_inference(len(request.sequences)) as span:
+            start_time = time.time()
+            input_tensor = torch.FloatTensor(request.sequences)
+            output = predictor.inference(input_tensor)
+            predictions = output.cpu().numpy().flatten().tolist()
+            inference_time = (time.time() - start_time) * 1000
+            span.set_outputs({
+                "predictions_count": len(predictions),
+                "inference_time_ms": round(inference_time, 2),
+            })
+            span.set_attributes({"inference_time_ms": inference_time})
+
+        if root_span:
+            root_span.set_outputs({
+                "ticker": request.ticker.upper(),
+                "predictions_count": len(predictions),
+                "batch_size": len(request.sequences),
+                "inference_time_ms": round(inference_time, 2),
+            })
 
     return BatchInferenceResponse(
         ticker=request.ticker.upper(),
