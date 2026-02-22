@@ -22,8 +22,8 @@ except ImportError:
 
 
 def setup_mlflow(
-    tracking_uri: Optional[str] = None,
-    experiment_name: Optional[str] = None,
+        tracking_uri: Optional[str] = None,
+        experiment_name: Optional[str] = None,
 ) -> str:
     """
     Configure MLflow tracking and experiment.
@@ -46,6 +46,12 @@ def setup_mlflow(
     exp_name = experiment_name or settings.MLFLOW_EXPERIMENT_NAME
 
     mlflow.set_tracking_uri(uri)
+
+    try:
+        mlflow.tracing.enable()
+        logger.info("MLflow tracing habilitado")
+    except Exception as e:
+        logger.warning(f"Falha ao habilitar MLflow tracing: {e}")
 
     experiment = mlflow.get_experiment_by_name(exp_name)
     if experiment is None:

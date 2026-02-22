@@ -3,6 +3,7 @@ FastAPI application.
 """
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.database.connection import init_db
@@ -68,6 +69,6 @@ app.include_router(prediction.router, prefix="/api/v1", tags=["Prediction"])
 app.include_router(inference.router, prefix="/api/v1/inference", tags=["Inference"])
 
 
-@app.get("/")
+@app.get("/", include_in_schema=False)
 def root():
-    return {"name": "Stock Price Prediction API", "version": "1.0.0", "docs": "/docs"}
+    return RedirectResponse(url="/docs")

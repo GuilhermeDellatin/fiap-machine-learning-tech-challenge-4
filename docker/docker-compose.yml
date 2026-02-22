@@ -14,13 +14,14 @@ services:
       - sqlite:///./data/mlflow.db
       - --default-artifact-root
       - /app/mlruns
+      - --serve-artifacts
       - --allowed-hosts
       - mlflow,mlflow:5000,localhost,localhost:5000,127.0.0.1,127.0.0.1:5000
     ports:
       - "5000:5000"
     volumes:
       - ../data:/app/data
-      - ../mlruns:/app/mlruns
+      - mlruns_data:/app/mlruns
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
       interval: 30s
@@ -41,7 +42,6 @@ services:
     volumes:
       - ../models:/app/models
       - ../data:/app/data
-      - ../mlruns:/app/mlruns
     environment:
       - DATABASE_URL=sqlite:///./data/stock_cache.db
       - CACHE_EXPIRY_HOURS=24
@@ -50,7 +50,7 @@ services:
       - DATA_DIR=data
       - MLFLOW_TRACKING_URI=http://mlflow:5000
       - MLFLOW_EXPERIMENT_NAME=stock-prediction-lstm
-      - MLFLOW_ARTIFACT_ROOT=/app/mlruns
+      - MLFLOW_ARTIFACT_ROOT=mlflow-artifacts:/
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -84,6 +84,4 @@ services:
       - monitoring
 
 volumes:
-  models:
-  data:
-  mlruns:
+  mlruns_data:

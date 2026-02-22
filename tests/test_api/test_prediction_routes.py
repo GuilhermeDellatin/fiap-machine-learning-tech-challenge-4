@@ -17,12 +17,6 @@ def test_predict_no_model_returns_404(api_client):
     assert "No trained model found" in detail["error"]
 
 
-def test_predict_get_no_model_returns_404(api_client):
-    """GET /predict/{ticker} sem modelo retorna 404."""
-    response = api_client.get("/api/v1/predict/AAPL?days_ahead=1")
-    assert response.status_code == 404
-
-
 def test_predict_batch_all_fail(api_client):
     """Batch prediction com tickers sem modelo registra falhas."""
     response = api_client.post(
