@@ -85,20 +85,26 @@ class StockPredictor:
         self.preprocessor = DataPreprocessor()
         self.preprocessor.load_scaler(scaler_path)
 
-        # Carregar modelo
+        # Carregar state dict e inferir arquitetura dos pesos do checkpoint
+        state_dict = torch.load(model_path, map_location=self.device, weights_only=True)
+        input_size = state_dict["lstm.weight_ih_l0"].shape[1]
+        hidden_size = state_dict["lstm.weight_ih_l0"].shape[0] // 4
+        num_layers = sum(1 for k in state_dict if k.startswith("lstm.weight_ih_l"))
+
         self.model = LSTMPredictor(
-            input_size=settings.INPUT_SIZE,
-            hidden_size=settings.HIDDEN_SIZE,
-            num_layers=settings.NUM_LAYERS,
+            input_size=input_size,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
             dropout=settings.DROPOUT,
         )
-        self.model.load_state_dict(
-            torch.load(model_path, map_location=self.device, weights_only=True)
-        )
+        self.model.load_state_dict(state_dict)
         self.model.to(self.device)
         self.model.eval()
 
-        logger.info(f"Model loaded: {model_path}")
+        logger.info(
+            f"Model loaded: {model_path} "
+            f"(hidden_size={hidden_size}, num_layers={num_layers})"
+        )
 
     def predict(
         self, historical_data: pd.DataFrame, days_ahead: int = 1
