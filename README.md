@@ -72,7 +72,7 @@ stock-prediction-lstm/
 │   ├── database/            # SQLAlchemy
 │   │   ├── connection.py    # Engine, SessionLocal, get_db()
 │   │   ├── models.py        # PriceCache, TrainingJob, ModelRegistry
-│   │   └── repository.py   # CRUD operations
+│   │   └── repository.py    # CRUD operations
 │   ├── data/
 │   │   ├── collector.py     # yfinance + cache SQLite
 │   │   └── preprocessor.py  # Normalização, sequences
@@ -82,11 +82,9 @@ stock-prediction-lstm/
 │   │   └── predictor.py     # Inferência
 │   ├── monitoring/          # Métricas Prometheus
 │   └── utils/               # config.py, logger.py, mlflow_setup.py
-├── scripts/                 # train.py, evaluate.py
+├── scripts/                 # scripts para execução CLI train.py, evaluate.py
 ├── docker/                  # Dockerfile, docker-compose.yml
 ├── tests/                   # pytest
-├── specs/                   # Especificações detalhadas por fase
-├── specs-mlflow/            # Especificações da integração MLflow
 ├── models/                  # Arquivos .pt e .joblib salvos
 └── data/                    # SQLite database
 ```

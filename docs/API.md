@@ -22,7 +22,6 @@
 | Training | `GET` | `/api/v1/training/models` | 200 | Lista modelos registrados |
 | Training | `POST` | `/api/v1/training/activate/{version_id}` | 200/404 | Ativa um modelo específico |
 | Prediction | `POST` | `/api/v1/predict` | 200/404 | Predição de preços futuros |
-| Prediction | `GET` | `/api/v1/predict/{ticker}` | 200/404 | Predição via GET |
 | Prediction | `POST` | `/api/v1/predict/batch` | 200 | Predição em lote para múltiplos tickers |
 | Inference | `POST` | `/api/v1/inference` | 200/404 | Inferência direta sobre dados fornecidos |
 | Inference | `POST` | `/api/v1/inference/batch` | 200/404 | Inferência em batch |
